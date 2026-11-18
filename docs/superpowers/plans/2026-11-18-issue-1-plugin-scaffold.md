@@ -178,8 +178,10 @@ t3-codian/
 - [ ] **Step 7: 编写失败的冒烟测试 `tests/smoke.test.ts`**
   断言内容：
   - `it('exports a plugin class that can be instantiated', ...)`：`new T3CodianPlugin(app, manifest)` 不抛异常，且 `plugin.manifest.id === 't3-codian'`；
-  - `it('completes onload without throwing', ...)`：`await plugin.onload()` 不抛异常，且 Mock 记录到至少一次 `registerView` 调用；
-  - `it('releases resources on unload', ...)`：`await plugin.onunload()` 不抛异常，且 Mock 记录到 `onunload` 已执行。
+  - `it('completes onload without throwing', ...)`：`await plugin.onload()` 不抛异常，且 Mock 记录到 `registerView` 与 `addCommand` 调用；
+  - `it('registers a chat view factory that produces the registered view type', ...)`：调用注册的工厂，断言产出的视图 `getViewType()` 与 `getDisplayText()` 符合预期；
+  - `it('opens the chat view in the right sidebar when the command runs', ...)`：执行注册命令的回调，断言右侧叶子节点激活了 `t3-codian-chat-view`；
+  - `it('releases registered resources and detaches its chat view on unload', ...)`：同步调用 `onunload()` 不抛异常，且 Mock 记录的 interval/event 登记项已被清空、视图已被卸载。
   `manifest` 对象字段固定为 `{ id: 't3-codian', name: 'T3-Codian', version: '0.1.0', minAppVersion: '1.5.0', description: 'T3 Code Agent integration for Obsidian', author: 'T3-Codian Team', isDesktopOnly: true }`。
 
 - [ ] **Step 8: 运行测试确认失败（红灯）**
@@ -188,10 +190,11 @@ t3-codian/
   ```
   预期：FAIL，报错指向 `Failed to resolve import "../src/main"`（文件尚不存在）或 `src/main.ts` 未导出默认类。
 
-  提供上列 `App`、`Plugin`、`PluginManifest`；`Plugin` 的 `registerView`/`addRibbonIcon`/`addCommand`/`addSettingTab` 均以数组形式记录调用以便断言；`loadData` 返回 `Promise.resolve(null)`，`saveData` 返回 `Promise.resolve()`；`App` 暴露 `workspace` 空对象占位。仅实现 Task 1 需要的面，其余 Obsidian API 留待后续 Task 按需扩展（YAGNI，避免 Mock 腐化）。
+- [ ] **Step 9: 写入 `tests/__mocks__/obsidian.ts`**
+  提供上列 `App`、`Plugin`、`ItemView`、`Workspace`；`PluginManifest` 直接 `import type` 自官方 `obsidian` 类型，不得在 Mock 内复制影子类型（避免 Mock 与官方 d.ts 静默漂移）；`Plugin` 的 `registerView`/`addRibbonIcon`/`addCommand`/`addSettingTab` 均以数组形式记录调用以便断言；`register`/`registerEvent`/`registerDomEvent`/`registerInterval` 用于表达 Obsidian 的资源登记语义，其基类 `onunload()` 负责清空登记项（对应 `docs/TESTING.md` 的「定时器被注销」要求）；`loadData` 返回 `Promise.resolve(null)`，`saveData` 返回 `Promise.resolve()`；`Workspace` 提供 `getRightLeaf()` 与 `detachLeavesOfType()`。仅实现 Task 1 需要的面，其余 Obsidian API 留待后续 Task 按需扩展（YAGNI，避免 Mock 腐化）。
 
 - [ ] **Step 10: 写入最小实现 `src/main.ts`**
-  默认导出 `T3CodianPlugin extends Plugin`；`onload()` 中调用 `this.registerView(VIEW_TYPE_T3_CODIAN, (leaf) => new T3CodianView(leaf))` 与 `this.addCommand({ id: 't3-codian-open-chat', name: '打开 T3-Codian 聊天面板', callback: () => {} })`；`onunload()` 中调用 `this.app.workspace.detachLeavesOfType(VIEW_TYPE_T3_CODIAN)` 释放已注册视图。
+  默认导出 `T3CodianPlugin extends Plugin`；`onload()` 中调用 `this.registerView(VIEW_TYPE_T3_CODIAN, (leaf) => new T3CodianView(leaf))` 与 `this.addCommand({ id: 't3-codian-open-chat', name: '打开 T3-Codian 聊天面板', callback: () => this.openChatView() })`（命令必须真实可用：经 `getRightLeaf(false).setViewState({ type })` 打开右侧边栏视图，**不得注册空回调**）；`onunload()` 必须是**同步** `void`（官方契约为 `onunload(): void`，Obsidian 不会 await 返回值），内部先调用 `this.app.workspace.detachLeavesOfType(VIEW_TYPE_T3_CODIAN)` 释放视图，再调用 `super.onunload()` 以触发 Obsidian 对已登记事件/定时器的清理。
   **必须同时创建 `src/ui/T3CodianView.ts`**：`tsc` 解析的是官方 `obsidian.d.ts`（Mock 仅在运行时生效），`registerView` 需要真实的 `View` 实例。该占位视图继承 `ItemView`，仅实现 `getViewType()` 与 `getDisplayText()`，不含任何 UI（真实 UI 属 Issue #6）。**不实现**任何网络或设置逻辑（属后续 Issue）。
 
 - [ ] **Step 11: 运行测试确认通过（绿灯）**
@@ -225,9 +228,11 @@ t3-codian/
 
 **Files:**
 - Create: `esbuild.config.mjs`
+- Create: `scripts/bundlePolicy.mjs`
 - Create: `scripts/verify-bundle.mjs`
 - Create: `manifest.json`
 - Create: `tests/manifest.test.ts`
+- Create: `tests/verify-bundle.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1 的 `package.json`（`version` 字段）、`src/main.ts` 入口。
@@ -248,10 +253,10 @@ t3-codian/
   内容固定：`{ "id": "t3-codian", "name": "T3-Codian", "version": "0.1.0", "minAppVersion": "1.5.0", "description": "T3 Code Agent integration for Obsidian", "author": "T3-Codian Team", "authorUrl": "https://github.com/sido-meet/t3-codian", "isDesktopOnly": true }`，`version` 必须与 `package.json` 一致。
 
 - [ ] **Step 4: 写入 `esbuild.config.mjs`**
-  使用 `esbuild.context()` 构建：`entryPoints: ["src/main.ts"]`、`bundle: true`、`format: "cjs"`、`platform: "browser"`、`target: "es2018"`、`outfile: "main.js"`、`external: ["obsidian", "electron", "node:*", ...builtinModules]`、`minify: production`、`sourcemap: production ? false : "inline"`、`logLevel: "info"`。脚本入口以 `process.argv.includes("--production")` 判定生产模式：生产模式 `rebuild()` 后 `dispose()` 退出；开发模式保持 `watch()` 常驻。
+  使用 `esbuild.context()` 构建：`absWorkingDir` 取配置文件所在目录（`fileURLToPath(new URL(".", import.meta.url))`），使构建不依赖进程当前工作目录；`entryPoints: ["src/main.ts"]`、`bundle: true`、`format: "cjs"`、`platform: "browser"`、`target: "es2018"`、`outfile: "main.js"`、`external: ["obsidian", "electron", "node:*", ...builtinModules]`、`minify: production`、`sourcemap: production ? false : "external"`、`logLevel: "info"`。脚本入口以 `process.argv.includes("--production")` 判定生产模式：生产模式 `rebuild()` 后 `dispose()` 退出；开发模式保持 `watch()` 常驻（dev 产物会覆写 `main.js`，README 需注明）。
 
-- [ ] **Step 5: 写入 `scripts/verify-bundle.mjs`**
-  使用 `node:fs`/`node:path` 实现以下断言，任一不满足即 `process.exit(1)` 并打印明确原因：
+- [ ] **Step 5: 写入 `scripts/bundlePolicy.mjs` 与 `scripts/verify-bundle.mjs`**
+  合规判定逻辑必须抽为**可导入的纯函数** `collectBundleViolations({ bundleText, sizeBytes, manifestVersion, packageVersion })`（返回违规信息数组，空数组代表合规），由 `scripts/verify-bundle.mjs`（CLI 入口，使用 `node:fs`/`node:path` 读取产物与清单）与 `tests/verify-bundle.test.ts`（单元测试）共同调用，避免门禁逻辑只能靠一次性人工验证。任何一项不满足即 `process.exit(1)` 并打印明确原因：
   1. 仓库根 `main.js` 存在；
   2. `main.js` 字节数 `< 200 * 1024`；
   3. `main.js` 内含对 `obsidian` 的外部引用（即未被内联打包），可通过对产物做 `require("obsidian")` 形态的字符串匹配判定；

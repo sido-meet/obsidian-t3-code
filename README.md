@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Obsidian Plugin](https://img.shields.io/badge/Obsidian-Plugin-purple.svg)](https://obsidian.md)
-[![Agent Protocol](https://img.shields.io/badge/Protocol-T3%20ACP%20%2F%20MCP-blue.svg)](https://github.com/obra/superpowers)
+[![Agent Protocol](https://img.shields.io/badge/Protocol-T3%20ACP%20%2F%20MCP-blue.svg)](https://github.com/sido-meet/t3-codian)
 
 ---
 
@@ -64,6 +64,7 @@ t3-codian/
 ├── AGENTS.md               # AI Agent 必须遵守的工程规则
 ├── CONTRIBUTING.md         # 参与协作与贡献指南
 ├── README.md               # 本文件
+├── LICENSE                 # MIT 许可证
 ├── package.json            # 依赖与脚本唯一真源
 ├── manifest.json           # Obsidian 插件元数据（版本与 package.json 强一致）
 ├── esbuild.config.mjs      # esbuild 单文件构建（CJS，obsidian 外部化）
@@ -82,16 +83,19 @@ t3-codian/
 │   ├── STATUS.md           # 项目状态跟踪（阶段、Issue、阻塞项）
 │   ├── WORKFLOW.md         # 完整开发工作流（TDD、Review、分支）
 │   ├── TESTING.md          # 测试策略与质量门禁
+│   ├── reviews/            # 独立 Code Review 记录归档
+│   ├── superpowers/plans/  # 实施计划（Issue 级）
 │   └── adr/                # 架构决策记录（Architecture Decision Records）
 │       ├── README.md
-│       └── 0001-init-project-and-engineering-governance.md
+│       ├── 0001-init-project-and-engineering-governance.md
+│       └── 0001-integration-architecture.md
 ```
 
 ## 5. 本地开发命令
 
 ```bash
 npm install          # 安装依赖（首次或依赖变更后）
-npm run dev          # esbuild 监听模式，产出根目录 main.js
+npm run dev          # esbuild 监听模式，产出根目录 main.js + main.js.map（调试版，会覆写产物）
 npm run build        # 生产构建 + 产物合规校验（体积/外部化/版本一致）
 npm run typecheck    # tsc --noEmit，零容忍类型错误
 npm run lint         # ESLint，零告警

@@ -9,7 +9,7 @@
 ## 1. 当前阶段概况
 
 当前项目处于**阶段 2：工程基础设施本地就绪，等待 PR 评审**阶段。  
-Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支 `feat/issue-1-plugin-scaffold` 上完成本地实现，四条门禁命令（typecheck / lint / test / build）全部通过，构建产物 `main.js` 为 943 字节且 `obsidian` 保持外部化。GitHub Actions 流水线已定义但**尚未在远端实跑**（分支尚未推送），因此 Issue #1 的「CI 流水线成功跑通」验收项仍处于未验证状态。
+Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支 `feat/issue-1-plugin-scaffold` 上完成本地实现，四条门禁命令（typecheck / lint / test / build）全部通过，构建产物 `main.js` 为 1056 字节且 `obsidian` 保持外部化。GitHub Actions 流水线已定义但**尚未在远端实跑**（分支尚未推送），因此 Issue #1 的「CI 流水线成功跑通」验收项仍处于未验证状态。
 
 ---
 
@@ -52,7 +52,8 @@ Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支
   - 构建链：esbuild 单文件 CommonJS 构建，`obsidian` 与 Node 内置模块外部化；`scripts/verify-bundle.mjs` 断言产物存在、体积 `< 200KB`、`obsidian` 未内联、manifest 与 package 版本一致（负向验证：超限/内联/缺失三种情形均以非 0 退出码失败）。
   - 测试基线：冒烟测试覆盖插件实例化、`onload` 注册视图与命令、`onunload` 卸载视图；manifest 一致性测试覆盖版本同步与必填字段。
   - 流水线与治理：`ci.yml`（PR + main push 门禁）、`release.yml`（仅 `v*` tag 触发，Agent 永不推送 tag）、Issue/PR 模板、README 目录结构与开发命令。
-  - 实测证据：`npm run typecheck` 零错误、`npm run lint` 零告警、`npm test` 6/6 通过、`npm run build` 产出 `main.js` 943 字节。
+  - 实测证据：`npm run typecheck` 零错误、`npm run lint` 零告警、`npm test` 12/12 通过、`npm run build` 产出 `main.js` 1056 字节。
+- [x] **Issue #1 三轮独立 Code Review 归档**：审查记录见 `docs/reviews/2026-11-18-issue-1-review.md`（任务级 / 整分支 / 外部独立审查三轮的发现与闭环方式均可追溯）。
 
 ---
 
@@ -87,7 +88,7 @@ Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支
 
 ## 5. 下一步任务 (Next Tasks)
 
-1. **完成独立 Code Review 与整分支复审**（任务级复审已 Approved；整分支复审的 1 项 Critical + 6 项 Important + 3 项 Minor 已全部闭环并通过定向复审）。
+1. **完成独立 Code Review 与整分支复审**（任务级复审 Approved；整分支复审的 1 项 Critical + 6 项 Important + 3 项 Minor 已闭环；外部独立审查的 4 项 P2 与可在本 Issue 内处理的 P3 已闭环，详见 `docs/reviews/2026-11-18-issue-1-review.md`）。
 2. **取得推送授权后推送 `feat/issue-1-plugin-scaffold`**，随后**只创建一次** PR（关联 Issue #1），并以 PR 检查（CI 只在推送到 `main` 或向 `main` 提 PR 时触发）确认 GitHub Actions 实跑结论，回填 run 链接。
 3. **等待仓库维护者审阅与合并**；Agent 严禁自行合并、严禁推送 `v*` tag、严禁创建 GitHub Release。
 4. **启动 Issue #2（配置管理与设置选项卡）**，依赖 Issue #1 合并完成。
