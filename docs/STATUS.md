@@ -1,15 +1,15 @@
 # T3-Codian 项目当前状态与里程碑进展 (STATUS)
 
-> **当前阶段**：阶段 0 — 工程与管理基础设施初始化（Phase 0: Engineering & Governance Init）  
-> **最后更新时间**：2026-11-18 12:38:00  
+> **当前阶段**：阶段 1 — MVP 实施计划定稿与工程基础设施筹备（Phase 1: MVP Plan Approved & Scaffold Ready）  
+> **最后更新时间**：2026-11-18 16:15:00  
 > **维护责任人**：技术负责人 (AI Tech Lead)
 
 ---
 
 ## 1. 当前阶段概况
 
-当前项目处于**阶段 0：工程管理与软件基础设施初始化**阶段。  
-重点是确保开发环境健全、建立不可违背的 Agent 工程规则、明确 Git 分支治理模式与架构顶层设计，为后续实质编码筑牢地基。
+当前项目处于**阶段 1：MVP 实施计划定稿与工程基础设施筹备**阶段。  
+系统需求（PRD）、系统架构（ARCHITECTURE）、测试策略（TESTING）及 MVP v0.1 实施计划（`docs/superpowers/plans/mvp-v0.1.md`）已全量完成并通过技术评审。待用户确认后即可正式开辟特性分支实施首个 Issue。
 
 ---
 
@@ -36,15 +36,36 @@
   - 发布系统架构设计规范：`docs/ARCHITECTURE.md`。
   - 发布端到端四层测试金字塔规范：`docs/TESTING.md`。
   - 发布集成架构决策记录：`docs/adr/0001-integration-architecture.md`。
+- [x] **Superpowers writing-plans 实施计划定稿**：
+  - 编制完成可独立验证、适合独立 Review 的 8 大核心任务与 12 个 Issue 规划。
+  - 归档于 `docs/superpowers/plans/mvp-v0.1.md`，涵盖工程基础设施设计与 Obsidian 官方发布策略。
+- [x] **GitHub Milestone 与 Issues 远程创建完成**：
+  - 创建 Milestone `MVP v0.1`（编号 #1，截止 2026-12-15），目标发布标签 `v0.1.0`。
+  - 创建 21 个自定义标签：`type:*`（feature/bug/documentation/tech-debt）、`area:*`（9 个）、`stage:scaffold`、`protocol:v2`、`streaming`、`agent:codex`、`obsidian-native`、`vault-safety`、`bug:*`（2 个）、`testing:integration`。
+  - 批量创建 12 个 Issue 并全部归入 Milestone `MVP v0.1`：
+    - Feature #1~#8（脚手架 / 设置 / 连接状态机 / 协议客户端 / 上下文提取 / 侧边栏视图 / 流式对话 / 内容采纳）
+    - Bug #9~#10（断线重连状态 / 未闭合 Markdown 渲染）
+    - Documentation #11（快速上手指引）
+    - Technical Debt #12（端到端 Mock Server 集成测试套件）
 
 ---
 
 ## 3. 正在开发的 Issue (Active Issues)
 
-- **当前无正在开发的业务 Issue**。
-- 即将正式规划并启动：
-  - **Issue #1**：Obsidian 基础插件脚手架与 TypeScript/esbuild 构建环境搭建。
-  - **Issue #2**：T3 Code ACP 通信协议客户端契约定义与 Mock 测试。
+- **当前无正在开发的业务 Issue**（等待用户确认首个启动的 Issue）。
+- Issue 清单与远程地址（仓库 `sido-meet/t3-codian`）：
+  - #1 https://github.com/sido-meet/t3-codian/issues/1
+  - #2 https://github.com/sido-meet/t3-codian/issues/2
+  - #3 https://github.com/sido-meet/t3-codian/issues/3
+  - #4 https://github.com/sido-meet/t3-codian/issues/4
+  - #5 https://github.com/sido-meet/t3-codian/issues/5
+  - #6 https://github.com/sido-meet/t3-codian/issues/6
+  - #7 https://github.com/sido-meet/t3-codian/issues/7
+  - #8 https://github.com/sido-meet/t3-codian/issues/8
+  - #9 https://github.com/sido-meet/t3-codian/issues/9
+  - #10 https://github.com/sido-meet/t3-codian/issues/10
+  - #11 https://github.com/sido-meet/t3-codian/issues/11
+  - #12 https://github.com/sido-meet/t3-codian/issues/12
 
 ---
 
@@ -56,6 +77,6 @@
 
 ## 5. 下一步任务 (Next Tasks)
 
-1. **规划并创建 GitHub Issue #1**：明确 Obsidian 插件脚手架与编译流水线的验收标准。
-2. **开辟首条特性分支**：基于 `main` 分支拉取 `feat/issue-1-plugin-scaffold`，进入 TDD 开发闭环。
-3. **工程脚手架配置**：编写 `package.json`、`tsconfig.json`、`manifest.json`，配置 `esbuild` 与 `vitest`。
+1. **选择并启动首个开发 Issue**（推荐 **Issue #1: [Feature] 工程基础设施搭建与基础插件脚手架**）。
+2. **创建特性分支**：基于 `main` 拉取 `feat/issue-1-plugin-scaffold`，遵循 TDD 与 Superpowers 开始实现。
+3. **提交 PR 并请求独立 Code Review**：合并权限保留给用户，Agent 严禁自行合并。
