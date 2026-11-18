@@ -100,7 +100,7 @@ npm run test:watch   # Vitest 监听模式
 npm run test:coverage # 输出覆盖率报告
 ```
 
-本地 T3 Code 服务端默认地址为 `http://127.0.0.1:3425`（可在插件设置中修改）。
+本地 T3 Code 服务端默认地址为 `http://127.0.0.1:3425`；可视化设置项将在 Issue #2（配置管理与设置选项卡）落地。
 
 ---
 

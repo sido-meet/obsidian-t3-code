@@ -41,7 +41,7 @@ Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支
   - 归档于 `docs/superpowers/plans/mvp-v0.1.md`，涵盖工程基础设施设计与 Obsidian 官方发布策略。
 - [x] **GitHub Milestone 与 Issues 远程创建完成**：
   - 创建 Milestone `MVP v0.1`（编号 #1，截止 2026-12-15），目标发布标签 `v0.1.0`。
-  - 创建 21 个自定义标签：`type:*`（feature/bug/documentation/tech-debt）、`area:*`（9 个）、`stage:scaffold`、`protocol:v2`、`streaming`、`agent:codex`、`obsidian-native`、`vault-safety`、`bug:*`（2 个）、`testing:integration`。
+  - 创建 22 个自定义标签：`type:*`（feature/bug/documentation/tech-debt，4 个）、`area:*`（9 个）、`stage:scaffold`、`protocol:v2`、`streaming`、`agent:codex`、`obsidian-native`、`vault-safety`、`bug:*`（2 个）、`testing:integration`。
   - 批量创建 12 个 Issue 并全部归入 Milestone `MVP v0.1`：
     - Feature #1~#8（脚手架 / 设置 / 连接状态机 / 协议客户端 / 上下文提取 / 侧边栏视图 / 流式对话 / 内容采纳）
     - Bug #9~#10（断线重连状态 / 未闭合 Markdown 渲染）
@@ -52,7 +52,7 @@ Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支
   - 构建链：esbuild 单文件 CommonJS 构建，`obsidian` 与 Node 内置模块外部化；`scripts/verify-bundle.mjs` 断言产物存在、体积 `< 200KB`、`obsidian` 未内联、manifest 与 package 版本一致（负向验证：超限/内联/缺失三种情形均以非 0 退出码失败）。
   - 测试基线：冒烟测试覆盖插件实例化、`onload` 注册视图与命令、`onunload` 卸载视图；manifest 一致性测试覆盖版本同步与必填字段。
   - 流水线与治理：`ci.yml`（PR + main push 门禁）、`release.yml`（仅 `v*` tag 触发，Agent 永不推送 tag）、Issue/PR 模板、README 目录结构与开发命令。
-  - 实测证据：`npm run typecheck` 零错误、`npm run lint` 零告警、`npm test` 5/5 通过、`npm run build` 产出 `main.js` 943 字节。
+  - 实测证据：`npm run typecheck` 零错误、`npm run lint` 零告警、`npm test` 6/6 通过、`npm run build` 产出 `main.js` 943 字节。
 
 ---
 
@@ -87,7 +87,7 @@ Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支
 
 ## 5. 下一步任务 (Next Tasks)
 
-1. **取得推送授权并推送 `feat/issue-1-plugin-scaffold`**，触发 GitHub Actions CI 实跑并回填 run 链接。
+1. **取得推送授权并推送 `feat/issue-1-plugin-scaffold`**，随后向 `main` 发起 PR 并以 PR 检查（CI 只在推送到 `main` 或向 `main` 提 PR 时触发）确认 GitHub Actions 实跑结论，回填 run 链接。
 2. **完成独立 Code Review 与整分支复审**，闭环全部发现项。
 3. **发起 PR**（关联 Issue #1），合并权限保留给用户，Agent 严禁自行合并、严禁推送 `v*` tag。
 4. **启动 Issue #2（配置管理与设置选项卡）**，依赖 Issue #1 合并完成。

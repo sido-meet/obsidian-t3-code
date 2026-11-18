@@ -59,5 +59,12 @@ body:
     attributes:
       label: Vault 安全
       options:
-        - label: 我确认此问题不涉及对真实笔记的破坏性写入。
-          required: true
+        - label: 复现步骤使用了测试库（test-vault），未对真实笔记造成破坏性写入。
+          required: false
+  - type: textarea
+    id: data-loss
+    attributes:
+      label: 是否涉及笔记数据丢失或被篡改？
+      description: 如涉及，请描述受影响的笔记与预期状态。
+    validations:
+      required: false

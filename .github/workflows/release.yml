@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -22,7 +24,8 @@ jobs:
       - name: Build plugin artifact
         run: npm run build
       - name: Verify version parity
-        run: node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync("manifest.json","utf8"));const p=JSON.parse(fs.readFileSync("package.json","utf8"));if(m.version!==p.version){console.error("version mismatch: manifest "+m.version+" vs package "+p.version);process.exit(1)}console.log("version parity OK: "+m.version);'
+        run: |
+          node -e "const fs=require('fs');const m=JSON.parse(fs.readFileSync('manifest.json','utf8'));const p=JSON.parse(fs.readFileSync('package.json','utf8'));if(m.version!==p.version){console.error('version mismatch: manifest '+m.version+' vs package '+p.version);process.exit(1)}console.log('version parity OK: '+m.version);"
       - name: Collect release assets
         run: |
           mkdir -p dist

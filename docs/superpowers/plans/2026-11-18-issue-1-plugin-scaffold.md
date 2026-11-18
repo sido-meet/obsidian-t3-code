@@ -133,13 +133,12 @@ t3-codian/
     "version": "0.1.0",
     "description": "T3 Code Agent integration for Obsidian",
     "main": "main.js",
-    "type": "module",
     "private": true,
     "scripts": {
       "build": "node esbuild.config.mjs --production && node scripts/verify-bundle.mjs",
       "dev": "node esbuild.config.mjs",
       "typecheck": "tsc --noEmit",
-      "lint": "eslint .",
+      "lint": "eslint . --max-warnings=0",
       "test": "vitest run",
       "test:watch": "vitest",
       "test:coverage": "vitest run --coverage"
@@ -170,7 +169,7 @@ t3-codian/
   固定选项：`target: "ES2022"`、`module: "ESNext"`、`moduleResolution: "bundler"`、`strict: true`、`noEmit: true`、`isolatedModules: true`、`esModuleInterop: true`、`skipLibCheck: true`、`forceConsistentCasingInFileNames: true`、`lib: ["ES2022", "DOM"]`、`types: ["node"]`、`include: ["src/**/*.ts", "tests/**/*.ts"]`。
 
 - [ ] **Step 5: 写入 `eslint.config.mjs`**
-  结构固定为：`tseslint.config({ ignores: ["node_modules/**", "main.js", "coverage/**", "scripts/**"] }, js.configs.recommended, ...tseslint.configs.recommended, { files: ["**/*.ts"], languageOptions: { globals: { ...globals.browser, ...globals.node } } })`。
+  结构固定为：`tseslint.config({ ignores: ["node_modules/**", "main.js", "coverage/**"] }, js.configs.recommended, ...tseslint.configs.recommended, { files: ["**/*.ts", "**/*.mjs", "**/*.mts"], languageOptions: { globals: { ...globals.browser, ...globals.node } } })`。
   采用**非类型感知**规则集（不带 `projectService`），类型错误由 `npm run typecheck` 单独把关，避免 lint 阶段引入第二套类型检查开销。
 
 - [ ] **Step 6: 写入 `vitest.config.mts`**
@@ -192,7 +191,8 @@ t3-codian/
   提供上列 `App`、`Plugin`、`PluginManifest`；`Plugin` 的 `registerView`/`addRibbonIcon`/`addCommand`/`addSettingTab` 均以数组形式记录调用以便断言；`loadData` 返回 `Promise.resolve(null)`，`saveData` 返回 `Promise.resolve()`；`App` 暴露 `workspace` 空对象占位。仅实现 Task 1 需要的面，其余 Obsidian API 留待后续 Task 按需扩展（YAGNI，避免 Mock 腐化）。
 
 - [ ] **Step 10: 写入最小实现 `src/main.ts`**
-  默认导出 `T3CodianPlugin extends Plugin`；`onload()` 中调用 `this.registerView('t3-codian-chat-view', () => ({ getViewType: () => 't3-codian-chat-view' }))` 与 `this.addCommand({ id: 't3-codian-open-chat', name: '打开 T3-Codian 聊天面板', callback: () => {} })`；`onunload()` 空实现但保留 `async` 签名。**不实现**任何 UI、网络或设置逻辑（属后续 Issue）。
+  默认导出 `T3CodianPlugin extends Plugin`；`onload()` 中调用 `this.registerView(VIEW_TYPE_T3_CODIAN, (leaf) => new T3CodianView(leaf))` 与 `this.addCommand({ id: 't3-codian-open-chat', name: '打开 T3-Codian 聊天面板', callback: () => {} })`；`onunload()` 中调用 `this.app.workspace.detachLeavesOfType(VIEW_TYPE_T3_CODIAN)` 释放已注册视图。
+  **必须同时创建 `src/ui/T3CodianView.ts`**：`tsc` 解析的是官方 `obsidian.d.ts`（Mock 仅在运行时生效），`registerView` 需要真实的 `View` 实例。该占位视图继承 `ItemView`，仅实现 `getViewType()` 与 `getDisplayText()`，不含任何 UI（真实 UI 属 Issue #6）。**不实现**任何网络或设置逻辑（属后续 Issue）。
 
 - [ ] **Step 11: 运行测试确认通过（绿灯）**
   ```bash
@@ -204,7 +204,7 @@ t3-codian/
 
 - [ ] **Step 12: 提交**
   ```bash
-  git add package.json package-lock.json tsconfig.json eslint.config.mjs vitest.config.mts src/main.ts tests/ .gitignore
+  git add package.json package-lock.json tsconfig.json eslint.config.mjs vitest.config.mts src/main.ts src/ui/T3CodianView.ts tests/ .gitignore
   git commit -m "chore(scaffold): bootstrap typescript, vitest and eslint engineering baseline"
   ```
 
@@ -265,8 +265,8 @@ t3-codian/
   预期：`npm test` PASS；`npm run build` 输出 esbuild 成功信息并由 `verify-bundle.mjs` 打印体积实测值，退出码 0。
 
 - [ ] **Step 7: 负向验证断言有效性（防止假测试）**
-  临时把 `main.js` 内容替换为超大文本或删除 `main.js`，重新执行 `npm run build`：
-  预期：命令以非 0 退出码失败并打印对应原因；验证后立即恢复真实构建产物。
+  临时把 `main.js` 内容替换为超大文本、替换为不含 `require("obsidian")` 的内容、或删除 `main.js`，然后**直接执行 `node scripts/verify-bundle.mjs`**（不可用 `npm run build`，它会先重新生成产物从而掩盖失败）：
+  预期：三种情形均以非 0 退出码失败并打印对应原因；验证后执行 `npm run build` 恢复真实构建产物。
 
 - [ ] **Step 8: 提交**
   ```bash
@@ -324,13 +324,13 @@ t3-codian/
   ```
   预期：五条命令依次成功，与 CI 步骤顺序一致。
 
-- [ ] **Step 6: 推送分支并观察 CI 实跑**
+- [ ] **Step 6: 推送分支、发起 PR 并观察 PR 检查实跑**
   ```bash
   git push -u origin feat/issue-1-plugin-scaffold
-  gh run list --branch feat/issue-1-plugin-scaffold --limit 5
-  gh run watch
+  gh pr create --base main --head feat/issue-1-plugin-scaffold --title "..." --body-file .github/PULL_REQUEST_TEMPLATE.md
+  gh pr checks --watch
   ```
-  预期：CI workflow 运行结论为 `success`。**推送前须取得用户对远程 Push 的明确授权（AGENTS.md 第 2 节）。**
+  预期：PR 检查结论为 `success`。CI 仅在「推送到 `main`」或「向 `main` 提 PR」时触发，推送特性分支本身不会触发工作流，因此必须以 PR 检查为准。**推送前须取得用户对远程 Push 的明确授权（AGENTS.md 第 2 节）。**
 
 - [ ] **Step 7: 发起 PR（不合并）**
   ```bash

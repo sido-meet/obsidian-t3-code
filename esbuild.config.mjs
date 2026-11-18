@@ -10,7 +10,7 @@ const context = await esbuild.context({
   platform: 'browser',
   target: 'es2018',
   outfile: 'main.js',
-  external: ['obsidian', 'electron', ...builtinModules],
+  external: ['obsidian', 'electron', 'node:*', ...builtinModules],
   minify: production,
   sourcemap: production ? false : 'inline',
   treeShaking: true,
