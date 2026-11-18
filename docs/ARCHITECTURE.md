@@ -1,21 +1,28 @@
 # T3-Codian 系统架构设计说明书
 
 > **系统名称**：T3-Codian  
-> **文档版本**：v0.1.0  
-> **状态**：初始架构框架  
-> **日期**：2026-11-18
+> **文档版本**：v1.0.0 (MVP 阶段定稿)  
+> **状态**：架构定稿 (Approved Architecture)  
+> **日期**：2026-11-18  
+> **责任人**：T3-Codian 技术负责人
 
 ---
 
-## 1. 架构愿景与设计原则
+## 1. 架构定位与设计哲学
 
-T3-Codian 的核心目标是将 **T3 Code** 强大的分布式智能体协同、工具执行与自主推理能力，桥接到 **Obsidian** 本地知识库环境。
+T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式智能体编排引擎** 的专属桥梁。
 
 ### 核心设计原则：
-1. **本地优先与沙箱防护 (Local-First & Safety First)**：Obsidian Vault 包含用户的核心机密与知识沉淀，架构设计必须确立严格的权限拦截层，任何写操作必须经过 Diff 可视化审查与用户显式批准。
-2. **松耦合与标准化协议 (Protocol-Driven)**：插件与 T3 Code 后端解耦，通过标准化的 Agent Client Protocol (ACP) 与 MCP 进行通信，保证后端引擎（Codex / Antigravity / Claude）可热插拔。
-3. **非阻塞与渐进式渲染 (Non-blocking & Progressive Streaming)**：所有 AI 推理与通信均在异步线程/子进程中完成，绝对禁止阻塞 Obsidian 的 UI 事件循环。
-4. **高可测性 (Testability)**：核心协议解析、状态机流转与安全过滤逻辑必须与 Obsidian DOM 完全解耦，以便进行纯粹的无头单元测试（Headless Unit Testing）。
+1. **轻量客户端，后端重计算 (Lightweight Client, Heavy Server)**：
+   - 彻底摒弃在插件内启动重量级子进程（Child Process）的方案，坚决不重写 Agent 状态机与工具执行器。
+   - 插件作为一个轻量的高性能网络客户端，通过标准 HTTP 与 WebSocket 协议连接本地已运行的 T3 Code 实例。
+2. **零破坏与 Vault 安全第一 (Zero-Disruption & Vault Safety)**：
+   - 严格落实非接触式上下文提取（只读探测），禁止 Agent 在后台自动篡改 Markdown 笔记。
+   - 所有回写操作必须经过用户显式触发（“插入当前光标处”），且完全进入 Obsidian 原生撤销栈（Ctrl+Z 可一键撤回）。
+3. **原生体验与极致性能 (Obsidian-Native & Zero Bloat)**：
+   - 采用 Obsidian 原生 DOM API + 内置 MarkdownRenderer 构建侧边栏面板，零第三方重型 UI 框架依赖，打包体积 `< 200KB`，样式 100% 自动适配用户当前主题。
+4. **协议驱动与版本解耦 (Protocol-Driven)**：
+   - 基于成熟的 **T3 Orchestrator V2 协议**（`T3_PROTOCOL_VERSION = 2`），实现请求、流式事件分发与错误恢复的标准化。
 
 ---
 
@@ -23,92 +30,191 @@ T3-Codian 的核心目标是将 **T3 Code** 强大的分布式智能体协同、
 
 ```text
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        Obsidian UI 表现层                              │
+│                        Obsidian 表现层 (Presentation Layer)            │
 │  ┌───────────────────────┐  ┌───────────────────┐  ┌────────────────┐  │
-│  │    T3-Codian View     │  │  Editor Context   │  │   Diff Modal   │  │
-│  │ (Chat/Thought/Tools)  │  │ (Active File/Sel) │  │ (Vault Safety) │  │
+│  │    T3CodianView       │  │  EditorContext    │  │ SettingTab     │  │
+│  │  (Sidebar Chat Panel) │  │  Bridge (Active/  │  │ (Server URL &  │  │
+│  │  - Header & Status    │  │   Selection)      │  │  Connection)   │  │
+│  │  - Message Stream     │  │                   │  │                │  │
+│  │  - Composer & Actions │  │                   │  │                │  │
 │  └───────────┬───────────┘  └─────────┬─────────┘  └───────┬────────┘  │
 └──────────────┼────────────────────────┼────────────────────┼───────────┘
                │                        │                    │
 ┌──────────────▼────────────────────────▼────────────────────▼───────────┐
-│                        T3-Codian 插件核心层 (Core)                     │
+│                    插件业务与状态层 (Core & State Layer)               │
 │  ┌────────────────────────┐  ┌───────────────────┐  ┌────────────────┐  │
-│  │  Plugin State Machine  │  │ Security Guard &  │  │ Obsidian Vault │  │
-│  │  (Session & Thread)    │  │ Approval Manager  │  │ Adapter (Safe) │  │
-│  └───────────┬────────────┘  └─────────┬─────────┘  └────────────────┘  │
-└──────────────┼─────────────────────────┼────────────────────────────────┘
-               │                         │
-┌──────────────▼─────────────────────────▼────────────────────────────────┐
-│                        通信与协议适配层 (Protocol Bridge)                │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │  Agent Client Protocol (ACP) Client / Local WebSocket or IPC     │  │
-│  │  - JSON-RPC 2.0 Message Dispatcher                              │  │
-│  │  - Heartbeat & Automatic Reconnect Manager                       │  │
-│  └──────────────────────────────────┬───────────────────────────────┘  │
-└─────────────────────────────────────┼──────────────────────────────────┘
-                                      │ IPC / Local WebSocket
-┌─────────────────────────────────────▼──────────────────────────────────┐
-│                        T3 Code 宿主与执行引擎                          │
+│  │    SessionController   │  │ ContextInjection  │  │ Settings &     │  │
+│  │    - Thread & Turn FSM │  │ Service           │  │ Storage Store  │  │
+│  └───────────┬────────────┘  └─────────┬─────────┘  └───────┬────────┘  │
+└──────────────┼─────────────────────────┼────────────────────┼───────────┘
+               │                         │                    │
+┌──────────────▼─────────────────────────▼────────────────────▼───────────┐
+│                    T3 Code 通信与协议层 (Connection & Protocol)         │
 │  ┌────────────────────────┐  ┌───────────────────┐  ┌────────────────┐  │
-│  │ Multi-Agent Swarm      │  │ Tool Runners      │  │ Git Worktree   │  │
-│  │ (Antigravity / Codex)  │  │ & MCP Servers     │  │ Isolated Envs  │  │
+│  │  T3ConnectionManager   │  │ T3WebSocketClient │  │ DPoPToken      │  │
+│  │  - FSM State Machine   │  │ - JSON-RPC 2.0    │  │ Broker         │  │
+│  │  - Auto-reconnect      │  │ - Stream Decoder  │  │ (@noble/hashes)│  │
+│  └────────────────────────┴──────────┬───────────┴───────────────────┘  │
+└──────────────────────────────────────┼──────────────────────────────────┘
+                                       │ HTTP REST & WebSocket
+┌──────────────────────────────────────▼──────────────────────────────────┐
+│                   本地 T3 Code 服务端 (http://127.0.0.1:3425)            │
+│  ┌────────────────────────┐  ┌───────────────────┐  ┌────────────────┐  │
+│  │ Multi-Agent Swarm      │  │ ChatGPT-Auth      │  │ Git Worktree   │  │
+│  │ (Codex, Antigravity)   │  │ Codex Runtime     │  │ & Checkpoints  │  │
 │  └────────────────────────┘  └───────────────────┘  └────────────────┘  │
-└────────────────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. 关键模块职责划分
+## 3. 核心子系统架构设计
 
-### 3.1 表现层 (Presentation Layer)
-- **`T3CodianView`**：挂载于 Obsidian 侧边栏的交互主面板，展示多轮对话、Agent 深度思考气泡、折叠工具执行日志。
-- **`EditorContextBridge`**：监听用户在编辑器中的选中文本、活动文档属性（Frontmatter）、关联双链标签，组装成结构化上下文。
-- **`DiffModal`**：当 Agent 提议修改笔记时触发的弹窗，提供类似 Git 的分栏对比，支持逐块接受或一键拒绝。
-
-### 3.2 插件核心与状态管理 (Core & State Layer)
-- **`SessionController`**：管理多会话生命周期，映射到 T3 Code 的 Thread ID。
-- **`SecurityGuard`**：核心安全看门狗。拦截非法文件系统访问（如跨出 Vault 边界访问操作系统敏感文件），对所有写入行为进行沙箱隔离。
-- **`VaultAdapter`**：通过 Obsidian 官方的 `app.vault` API 进行安全的只读检索与安全受控写入。
-
-### 3.3 协议通信层 (Protocol Bridge Layer)
-- 实现对 **Agent Client Protocol (ACP)** 的轻量级 TypeScript 客户端封装。
-- 负责：
-  - 会话初始化与握手鉴权（Handshake）
-  - 流式 Token 分发（Streaming tokens dispatch）
-  - 工具调用请求（`tool_call`）与用户确认响应回传（`tool_result`）
-  - 异常中断、超时期与重连处理
+### 3.1 Obsidian 插件表现层 (`src/ui/`)
+1. **`T3CodianPlugin`**：
+   - 继承自 Obsidian `Plugin` 基类，管理插件生命周期：
+     - `onload()`：初始化配置、注册命令、添加侧边栏图标、注册 `T3CodianView` 视图、启动后台连接健康探测。
+     - `onunload()`：断开 WebSocket 连接，释放定时器，清理事件监听，保证**零进程与句柄残留**。
+2. **`T3CodianView`**：
+   - 继承自 `ItemView`（ViewType: `t3-codian-chat-view`），挂载在右侧边栏。
+   - 内部由三部分组成：
+     - **Header**：展示 T3 Code 连接状态绿灯/红灯、当前模型指示器（Codex）、一键新建会话按钮；
+     - **Message Container**：气泡式展示用户与 Agent 对话，集成思考过程展开/折叠、Markdown 代码高亮；
+     - **Composer**：Prompt 输入框、选区附件开关、发送/停止生成控制。
+3. **`EditorContextBridge`**：
+   - 安全读取 `app.workspace.getActiveViewOfType(MarkdownView)`：
+     - 提取当前文件名称、路径与前言；
+     - 提取用户选中的文本片段（`editor.getSelection()`）；
+     - 将上下文格式化为 Markdown 引用块追加在用户 Prompt 前端。
 
 ---
 
-## 4. 核心工作时序（用户提问到笔记修改）
+### 3.2 T3 Code 连接与通信层 (`src/connection/`)
+1. **`T3ConnectionManager` 连接状态机**：
+   ```text
+   [DISCONNECTED] ──(探测成功)──► [CONNECTING] ──(WS握手)──► [CONNECTED]
+         ▲                              │                          │
+         │ (探测失败/服务未开启)        │ (连接出错)               │ (连接中断)
+         └── [PROBING / IDLE] ◄─────────┴──────────────────────────┘
+                     │ (退避重试: 1s, 2s, 4s...)
+                     ▼
+             [RECONNECTING]
+   ```
+2. **协议端点契约**：
+   - **握手探测**：`GET /.well-known/t3/environment`
+     - 校验返回值中 `orchestrationProtocolVersion === 2`。
+   - **配对认证**：`POST /oauth/token`
+     - 若配置了配对码，使用 DPoP 签名完成令牌交换；若是本地无鉴权直连模式，直接使用初始会话令牌。
+   - **实时数据流**：`ws://127.0.0.1:3425/api/orchestration/v2`
+     - 基于 JSON-RPC 2.0，发送 `turn/start`，持续监听服务端下发的 `item/append`（文本增量）、`turn/completed`（轮次完成）。
 
-```text
-User            Obsidian View         Core/Security         ACP Bridge         T3 Code Engine
- │                    │                     │                   │                     │
- ├─── 发起指令 ──────►│                     │                   │                     │
- │   (带当前笔记)     ├─── 提取上下文 ─────►│                   │                     │
- │                    │                     ├─── 发送 Prompt ──►│                     │
- │                    │                     │                   ├─── 转发 ACP ───────►│
- │                    │                     │                   │                     ├── 推理/规划
- │                    │                     │                   │◄── 流式 Token ──────┤
- │                    │◄── 实时渲染文字 ────┼───────────────────┤                     │
- │                    │                     │                   │◄── 申请写笔记工具 ──┤
- │                    │                     │◄── 拦截修改请求 ──┤   (tool_call)       │
- │                    │◄── 弹出 Diff 审核 ──┤                   │                     │
- ├─── 批准修改 ──────►│                     │                   │                     │
- │                    ├─── 确认回传 ───────►├── 执行安全写入 ───┼─ (Vault 修改成功)   │
- │                    │                     └── 回传工具结果 ──►├─── Tool Result ────►│
- │                    │                                         │                     ├── 最终总结
- │                    │◄── 渲染完成状态 ────────────────────────┼─────────────────────┤
+---
+
+### 3.3 会话与运行控制层 (`src/session/`)
+1. **`SessionController`**：
+   - 维护当前活跃的 `activeThreadId`。
+   - 调用 T3 Code 的 `thread.create` 创建会话，或复用已有会话。
+   - 提供 `resetSession()` 一键清空上下文并开辟新 Thread。
+2. **`TurnController`**：
+   - 跟踪单次回答的生命周期：
+     - 发送 Prompt 时创建临时的 Assistant 消息占位符；
+     - 接收增量 Token 时，通过节流函数（`requestAnimationFrame`）更新 UI；
+     - 点击“停止”时，向服务端下发 `turn/interrupt`。
+
+---
+
+### 3.4 安全沙箱与 Vault 保护体系 (`src/security/`)
+- **只读探测原则**：除 Obsidian 官方公开只读 API（`editor.getSelection`、`file.vault.read`）外，插件不直接扫描或写入未受保护的文件。
+- **用户显式操作写入**：
+  - 点击“插入当前光标处”：调用 `editor.replaceRange(content, cursor)`，该操作完全在 Obsidian 编辑器事务内完成，直接纳入本地撤销树（Ctrl+Z）。
+- **本地回环网络锁定**：
+  - 默认仅允许连接 `127.0.0.1` 与 `localhost`，禁止向非受信的远程公网端点推送笔记上下文。
+
+---
+
+## 4. 技术选型判定表
+
+| 核心问题 | 最终选型 | 理由与依据 |
+| :--- | :--- | :--- |
+| **编程语言** | TypeScript 5.x (`strict: true`) | 与 Obsidian API 深度契合，配合 `@effect/schema` 类型契约。 |
+| **UI 渲染框架** | 原生 DOM API + Obsidian MarkdownRenderer | 零 React 开销，打包体积极小（`<200KB`），无缝适配主题 CSS 变量。 |
+| **通信机制** | 原生 `fetch` + 原生 `WebSocket` | 纯 Web 标准，跨平台高度一致，无任何 Node 平台原生绑定。 |
+| **加密库** | `@noble/hashes` (轻量纯 JS) | 仅用于 DPoP 签名的 SHA-256，替代体积臃肿的 Node crypto。 |
+| **构建体系** | `esbuild` | 毫秒级打包，构建产物仅为单个 `main.js`。 |
+| **测试套件** | `vitest` | 支持快速单元测试、模拟 WebSocket 服务端测试与 Obsidian 内存 Mock。 |
+
+---
+
+## 5. 核心接口与数据结构设计
+
+### 5.1 基础数据结构
+```typescript
+/** 连接状态枚举 */
+export enum ConnectionStatus {
+  Disconnected = 'disconnected',
+  Connecting = 'connecting',
+  Connected = 'connected',
+  Reconnecting = 'reconnecting',
+  Error = 'error',
+}
+
+/** 插件持久化配置 */
+export interface T3CodianSettings {
+  serverUrl: string;          // 默认: "http://127.0.0.1:3425"
+  autoAttachContext: boolean; // 默认: true (自动包含活动笔记/选区)
+  maxContextLength: number;   // 默认: 8000
+  defaultProvider: string;    // 默认: "codex"
+  defaultModel: string;       // 默认: ""
+}
+
+/** 消息气泡结构 */
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  thought?: string;           // 思考链路文本
+  createdAt: number;
+  isStreaming?: boolean;
+}
+
+/** T3 Code 环境描述符 */
+export interface T3EnvironmentDescriptor {
+  environmentId: string;
+  label: string;
+  orchestrationProtocolVersion: number;
+}
+```
+
+### 5.2 核心服务接口契约
+```typescript
+/** T3 Code 传输连接服务 */
+export interface IT3ConnectionService {
+  readonly status: ConnectionStatus;
+  connect(): Promise<void>;
+  disconnect(): void;
+  sendRequest<T>(method: string, params: unknown): Promise<T>;
+  onNotification(method: string, handler: (params: unknown) => void): () => void;
+  onStatusChange(handler: (status: ConnectionStatus) => void): () => void;
+}
+
+/** 会话调度服务 */
+export interface ISessionService {
+  readonly currentThreadId: string | null;
+  readonly isRunning: boolean;
+  startNewThread(): Promise<string>;
+  sendPrompt(prompt: string, context?: string): Promise<void>;
+  stopCurrentTurn(): Promise<void>;
+  onMessageUpdate(handler: (message: ChatMessage) => void): () => void;
+}
 ```
 
 ---
 
-## 5. 技术栈与工具链选型
+## 6. 异常与错误恢复矩阵
 
-- **核心语言**：TypeScript 5.x (严格模式 `strict: true`)
-- **宿主框架**：Obsidian Plugin API (`obsidian`)
-- **构建工具**：`esbuild`（毫秒级打包与热重载）
-- **测试框架**：`vitest`（单元测试与无头逻辑覆盖）+ `@testing-library`
-- **样式方案**：CSS 变量深度集成 Obsidian 官方主题调色板（适配暗色/亮色）
-- **架构决策记录**：重大技术决策见 [docs/adr/](file:///E:/Projects/T3-Codian/docs/adr/README.md)
+| 异常类型 | 触发场景 | 表现与用户反馈 | 系统恢复动作 |
+| :--- | :--- | :--- | :--- |
+| **`ServerOfflineError`** | T3 Code 桌面端未运行，端口拒绝连接 | 侧边栏展示醒目橙色卡片：“T3 Code 服务未开启” | 进入低频探测模式（每 5s 探测一次），恢复后自动重连。 |
+| **`ProtocolMismatchError`**| 服务端协议版本不为 2 | 提示“请升级 T3 Code 桌面端到最新版本” | 停止握手尝试，阻断消息发送，避免脏数据写入。 |
+| **`TurnInterruptedError`** | 用户点击“停止生成”或关闭 Obsidian | 消息气泡标记“生成已取消”，保留已生成的片段 | 向服务端发送取消信号，安全关闭当前流监听。 |
+| **`VaultAccessError`** | 当前未打开任何笔记却尝试插入 | 弹窗提示“请先在编辑器中打开一篇笔记” | 拦截插入动作，保护剪贴板内容。 |

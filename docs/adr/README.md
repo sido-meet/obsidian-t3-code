@@ -8,7 +8,8 @@
 
 | 编号 | 标题 | 状态 | 决策日期 |
 | :---: | :--- | :---: | :---: |
-| [0001](0001-init-project-and-engineering-governance.md) | 工程初始化与严谨治理规范建立 | **Accepted** | 2026-11-18 |
+| [0001-A](0001-init-project-and-engineering-governance.md) | 工程初始化与严谨治理规范建立 | **Accepted** | 2026-11-18 |
+| [0001-B](0001-integration-architecture.md) | T3-Codian 核心集成架构选型（轻量原生客户端与 V2 协议） | **Accepted** | 2026-11-18 |
 
 ---
 

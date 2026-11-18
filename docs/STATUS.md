@@ -32,6 +32,10 @@
   - 深度阅读并剖析 `YishenTu/claudian`、`pingdotgg/t3code`、`7bgsbm749g-boop/t3-obsidian` 三大源码库。
   - 完成 4 份调研与对比决策报告：`docs/research/claudian.md`、`docs/research/t3code.md`、`docs/research/t3-obsidian.md`、`docs/research/architecture-comparison.md`。
   - 确立以“方案 D（深度原生 UI + T3 V2 协议桥接）”为核心推荐的技术路径。
+- [x] **完整技术架构设计与测试策略定稿**：
+  - 发布系统架构设计规范：`docs/ARCHITECTURE.md`。
+  - 发布端到端四层测试金字塔规范：`docs/TESTING.md`。
+  - 发布集成架构决策记录：`docs/adr/0001-integration-architecture.md`。
 
 ---
 
