@@ -1,17 +1,20 @@
-import type { WorkspaceLeaf } from 'obsidian';
+import type { PluginManifest, WorkspaceLeaf } from 'obsidian';
 
-export interface PluginManifest {
-  id: string;
-  name: string;
-  version: string;
-  minAppVersion: string;
-  description: string;
-  author: string;
-  isDesktopOnly?: boolean;
+export class WorkspaceLeafStub {
+  constructor(private readonly workspace: Workspace) {}
+
+  async setViewState(viewState: { type: string }): Promise<void> {
+    this.workspace.activatedViewTypes.push(viewState.type);
+  }
 }
 
 export class Workspace {
+  readonly activatedViewTypes: string[] = [];
   readonly detachedViewTypes: string[] = [];
+
+  getRightLeaf(_split: boolean): WorkspaceLeafStub | null {
+    return new WorkspaceLeafStub(this);
+  }
 
   detachLeavesOfType(type: string): void {
     this.detachedViewTypes.push(type);
@@ -31,6 +34,9 @@ export class Plugin {
   readonly ribbonIcons: { icon: string; title: string; callback: () => void }[] = [];
   readonly commands: unknown[] = [];
   readonly settingsTabs: unknown[] = [];
+  readonly registeredIntervals: number[] = [];
+  readonly registeredEvents: unknown[] = [];
+  readonly registeredCallbacks: (() => unknown)[] = [];
 
   constructor(public app: App, public manifest: PluginManifest) {}
 
@@ -61,7 +67,26 @@ export class Plugin {
     this.settingsTabs.push(tab);
   }
 
+  register(callback: () => unknown): void {
+    this.registeredCallbacks.push(callback);
+  }
+
+  registerEvent(eventRef: unknown): void {
+    this.registeredEvents.push(eventRef);
+  }
+
+  registerDomEvent(): void {}
+
+  registerInterval(id: number): number {
+    this.registeredIntervals.push(id);
+    return id;
+  }
+
   async onload(): Promise<void> {}
 
-  async onunload(): Promise<void> {}
+  onunload(): void {
+    this.registeredIntervals.length = 0;
+    this.registeredEvents.length = 0;
+    this.registeredCallbacks.length = 0;
+  }
 }

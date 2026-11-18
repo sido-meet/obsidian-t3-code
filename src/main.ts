@@ -12,11 +12,21 @@ export default class T3CodianPlugin extends Plugin {
     this.addCommand({
       id: 't3-codian-open-chat',
       name: '打开 T3-Codian 聊天面板',
-      callback: () => {},
+      callback: () => this.openChatView(),
     });
   }
 
-  async onunload(): Promise<void> {
+  onunload(): void {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_T3_CODIAN);
+    super.onunload();
+  }
+
+  private openChatView(): void {
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) {
+      return;
+    }
+
+    void leaf.setViewState({ type: VIEW_TYPE_T3_CODIAN });
   }
 }

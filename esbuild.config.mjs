@@ -1,9 +1,12 @@
 import { builtinModules } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import esbuild from 'esbuild';
 
 const production = process.argv.includes('--production');
+const repoRoot = fileURLToPath(new URL('.', import.meta.url));
 
 const context = await esbuild.context({
+  absWorkingDir: repoRoot,
   entryPoints: ['src/main.ts'],
   bundle: true,
   format: 'cjs',
@@ -12,7 +15,7 @@ const context = await esbuild.context({
   outfile: 'main.js',
   external: ['obsidian', 'electron', 'node:*', ...builtinModules],
   minify: production,
-  sourcemap: production ? false : 'inline',
+  sourcemap: production ? false : 'external',
   treeShaking: true,
   logLevel: 'info',
 });

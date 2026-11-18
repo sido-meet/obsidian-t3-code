@@ -5,11 +5,20 @@ import { describe, expect, it } from 'vitest';
 
 interface RegisteredView {
   type: string;
-  factory: (leaf: unknown) => { getViewType(): string };
+  factory: (leaf: unknown) => { getViewType(): string; getDisplayText(): string };
+}
+
+interface RegisteredCommand {
+  id: string;
+  name: string;
+  callback: () => void;
 }
 
 const getRegisteredViews = (plugin: T3CodianPlugin): RegisteredView[] =>
   (plugin as unknown as { registeredViews: RegisteredView[] }).registeredViews;
+
+const getRegisteredCommands = (plugin: T3CodianPlugin): RegisteredCommand[] =>
+  (plugin as unknown as { commands: RegisteredCommand[] }).commands;
 
 const manifest: PluginManifest = {
   id: 't3-codian',
@@ -52,13 +61,31 @@ describe('T3-Codian plugin', () => {
 
     expect(registeredView.type).toBe('t3-codian-chat-view');
     expect(registeredView.factory({}).getViewType()).toBe('t3-codian-chat-view');
+    expect(registeredView.factory({}).getDisplayText()).toBe('T3-Codian');
   });
 
-  it('detaches its chat view on unload', async () => {
+  it('opens the chat view in the right sidebar when the command runs', async () => {
     const plugin = new T3CodianPlugin(new App(), manifest);
     await plugin.onload();
 
-    await expect(plugin.onunload()).resolves.toBeUndefined();
+    const [command] = getRegisteredCommands(plugin);
+
+    command.callback();
+
+    expect(plugin.app.workspace).toHaveProperty(
+      'activatedViewTypes',
+      expect.arrayContaining(['t3-codian-chat-view']),
+    );
+  });
+
+  it('releases registered resources and detaches its chat view on unload', async () => {
+    const plugin = new T3CodianPlugin(new App(), manifest);
+    await plugin.onload();
+    plugin.registerInterval(42);
+
+    expect(() => plugin.onunload()).not.toThrow();
+
+    expect(plugin).toHaveProperty('registeredIntervals', []);
     expect(plugin.app.workspace).toHaveProperty(
       'detachedViewTypes',
       expect.arrayContaining(['t3-codian-chat-view']),
