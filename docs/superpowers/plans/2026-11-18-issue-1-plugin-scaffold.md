@@ -324,31 +324,27 @@ t3-codian/
   ```
   预期：五条命令依次成功，与 CI 步骤顺序一致。
 
-- [ ] **Step 6: 推送分支、发起 PR 并观察 PR 检查实跑**
+- [ ] **Step 6: 推送分支、发起唯一 PR 并观察 PR 检查实跑**
   ```bash
   git push -u origin feat/issue-1-plugin-scaffold
-  gh pr create --base main --head feat/issue-1-plugin-scaffold --title "..." --body-file .github/PULL_REQUEST_TEMPLATE.md
+  gh pr create --base main --head feat/issue-1-plugin-scaffold --title "chore(scaffold): bootstrap engineering infrastructure and plugin scaffold" --body-file .github/PULL_REQUEST_TEMPLATE.md
   gh pr checks --watch
   ```
-  预期：PR 检查结论为 `success`。CI 仅在「推送到 `main`」或「向 `main` 提 PR」时触发，推送特性分支本身不会触发工作流，因此必须以 PR 检查为准。**推送前须取得用户对远程 Push 的明确授权（AGENTS.md 第 2 节）。**
+  预期：PR 检查结论为 `success`。CI 仅在「推送到 `main`」或「向 `main` 提 PR」时触发，推送特性分支本身不会触发工作流，因此必须以 PR 检查为准。PR 正文需填入 Issue #1 关联与四条门禁命令的真实输出；**严禁自行合并**（AGENTS.md 规则 11）。**推送前须取得用户对远程 Push 的明确授权（AGENTS.md 第 2 节）。**
 
-- [ ] **Step 7: 发起 PR（不合并）**
-  ```bash
-  gh pr create --base main --head feat/issue-1-plugin-scaffold --title "chore(scaffold): bootstrap engineering infrastructure and plugin scaffold" --body-file .github/PULL_REQUEST_TEMPLATE.md
-  ```
-  PR 关联 Issue #1；**严禁自行合并**（AGENTS.md 规则 11）。
-
-- [ ] **Step 8: 独立 Code Review**
+- [ ] **Step 7: 独立 Code Review**
   按 AGENTS.md 规则 10，委派独立审阅者（子 Agent 或独立评审流程）检查：门禁真实性（是否存在假测试/被跳过的断言）、构建产物合规性、Mock 与官方 d.ts 的签名一致性、CI 步骤与本地命令一致性。审阅意见须在合并前逐条闭环。
 
-- [ ] **Step 9: 更新 `docs/STATUS.md`**
+- [ ] **Step 8: 更新 `docs/STATUS.md`**
   将「当前阶段」推进为「阶段 2 — 工程基础设施就绪，Issue #2 可启动」，在「已完成事项」追加本 Issue 的实际交付物与**实测证据**（CI run 链接、四条门禁命令输出），在「正在开发的 Issue」记录 Issue #1 状态与 PR 链接。严禁写入未实际发生的事项。
 
-- [ ] **Step 10: 提交**
+- [ ] **Step 9: 提交**
   ```bash
   git add .github/ README.md docs/STATUS.md
   git commit -m "chore(ci): add github actions pipelines and repository governance templates"
   ```
+
+**执行顺序（唯一序列，不得重复创建 PR）:** Step 7（独立 Code Review）→ 取得用户推送授权 → Step 6（推送 + 创建唯一 PR + 观察 PR 检查）→ Step 8（回填 STATUS.md 的 CI 链接）→ Step 9（提交）。
 
 **验收标准:**
 1. GitHub Actions CI 在 PR 上完整跑通并显示绿色；

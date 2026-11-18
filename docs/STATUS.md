@@ -87,7 +87,7 @@ Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支
 
 ## 5. 下一步任务 (Next Tasks)
 
-1. **取得推送授权并推送 `feat/issue-1-plugin-scaffold`**，随后向 `main` 发起 PR 并以 PR 检查（CI 只在推送到 `main` 或向 `main` 提 PR 时触发）确认 GitHub Actions 实跑结论，回填 run 链接。
-2. **完成独立 Code Review 与整分支复审**，闭环全部发现项。
-3. **发起 PR**（关联 Issue #1），合并权限保留给用户，Agent 严禁自行合并、严禁推送 `v*` tag。
+1. **完成独立 Code Review 与整分支复审**（任务级复审已 Approved；整分支复审的 1 项 Critical + 6 项 Important + 3 项 Minor 已全部闭环并通过定向复审）。
+2. **取得推送授权后推送 `feat/issue-1-plugin-scaffold`**，随后**只创建一次** PR（关联 Issue #1），并以 PR 检查（CI 只在推送到 `main` 或向 `main` 提 PR 时触发）确认 GitHub Actions 实跑结论，回填 run 链接。
+3. **等待仓库维护者审阅与合并**；Agent 严禁自行合并、严禁推送 `v*` tag、严禁创建 GitHub Release。
 4. **启动 Issue #2（配置管理与设置选项卡）**，依赖 Issue #1 合并完成。
