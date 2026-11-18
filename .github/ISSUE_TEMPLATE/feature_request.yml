@@ -1,0 +1,37 @@
+name: 功能建议
+description: 提出新功能或改进建议，并关联对应的 PRD 需求
+title: "[Feature] "
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题场景
+      description: 你在什么工作流中遇到了什么阻碍？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望收益
+      description: 该功能将如何改善你的 Obsidian 工作流？
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+      description: 你考虑过的其他做法及其不足。
+  - type: input
+    id: prd-reference
+    attributes:
+      label: 关联 PRD 需求
+      description: 对应 PRD 中的需求编号，例如 F-04。
+      placeholder: F-04
+    validations:
+      required: true
+  - type: input
+    id: milestone
+    attributes:
+      label: 目标里程碑
+      placeholder: MVP v0.1

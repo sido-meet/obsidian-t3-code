@@ -64,19 +64,47 @@ t3-codian/
 ├── AGENTS.md               # AI Agent 必须遵守的工程规则
 ├── CONTRIBUTING.md         # 参与协作与贡献指南
 ├── README.md               # 本文件
+├── package.json            # 依赖与脚本唯一真源
+├── manifest.json           # Obsidian 插件元数据（版本与 package.json 强一致）
+├── esbuild.config.mjs      # esbuild 单文件构建（CJS，obsidian 外部化）
+├── vitest.config.mts       # Vitest 配置（obsidian 运行时别名、覆盖率）
+├── eslint.config.mjs       # ESLint flat config
+├── tsconfig.json           # TypeScript 严格模式（仅类型检查）
+├── scripts/                # 构建产物校验脚本
+├── src/                    # 插件源码
+│   ├── main.ts             # 插件入口（T3CodianPlugin）
+│   └── ui/                 # 侧边栏视图
+├── tests/                  # 单元测试与 Obsidian Mock
+├── .github/                # Actions 流水线、Issue 与 PR 模板
 ├── docs/                   # 项目设计与文档
 │   ├── PRD.md              # 产品需求文档
 │   ├── ARCHITECTURE.md     # 架构设计方案
 │   ├── STATUS.md           # 项目状态跟踪（阶段、Issue、阻塞项）
 │   ├── WORKFLOW.md         # 完整开发工作流（TDD、Review、分支）
+│   ├── TESTING.md          # 测试策略与质量门禁
 │   └── adr/                # 架构决策记录（Architecture Decision Records）
 │       ├── README.md
 │       └── 0001-init-project-and-engineering-governance.md
 ```
 
+## 5. 本地开发命令
+
+```bash
+npm install          # 安装依赖（首次或依赖变更后）
+npm run dev          # esbuild 监听模式，产出根目录 main.js
+npm run build        # 生产构建 + 产物合规校验（体积/外部化/版本一致）
+npm run typecheck    # tsc --noEmit，零容忍类型错误
+npm run lint         # ESLint，零告警
+npm test             # Vitest 单次执行（TDD 红灯/绿灯验证）
+npm run test:watch   # Vitest 监听模式
+npm run test:coverage # 输出覆盖率报告
+```
+
+本地 T3 Code 服务端默认地址为 `http://127.0.0.1:3425`（可在插件设置中修改）。
+
 ---
 
-## 5. 工程规约速查
+## 6. 工程规约速查
 
 本项目推行严格的软件工程规约：
 - **禁止在 `main` 直接开发**：必须通过 `feat/*` 特性分支或 Worktree 推进。
@@ -87,6 +115,6 @@ t3-codian/
 
 ---
 
-## 6. 开源协议
+## 7. 开源协议
 
 本项目采用 [MIT License](LICENSE) 授权。

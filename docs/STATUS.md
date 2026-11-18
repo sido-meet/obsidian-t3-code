@@ -1,15 +1,15 @@
 # T3-Codian 项目当前状态与里程碑进展 (STATUS)
 
-> **当前阶段**：阶段 1 — MVP 实施计划定稿与工程基础设施筹备（Phase 1: MVP Plan Approved & Scaffold Ready）  
-> **最后更新时间**：2026-11-18 16:15:00  
+> **当前阶段**：阶段 2 — 工程基础设施本地就绪，等待 PR 评审（Phase 2: Engineering Baseline Ready, PR Pending Review）  
+> **最后更新时间**：2026-11-18 16:52:00  
 > **维护责任人**：技术负责人 (AI Tech Lead)
 
 ---
 
 ## 1. 当前阶段概况
 
-当前项目处于**阶段 1：MVP 实施计划定稿与工程基础设施筹备**阶段。  
-系统需求（PRD）、系统架构（ARCHITECTURE）、测试策略（TESTING）及 MVP v0.1 实施计划（`docs/superpowers/plans/mvp-v0.1.md`）已全量完成并通过技术评审。待用户确认后即可正式开辟特性分支实施首个 Issue。
+当前项目处于**阶段 2：工程基础设施本地就绪，等待 PR 评审**阶段。  
+Issue #1（工程基础设施搭建与基础插件脚手架）已在特性分支 `feat/issue-1-plugin-scaffold` 上完成本地实现，四条门禁命令（typecheck / lint / test / build）全部通过，构建产物 `main.js` 为 943 字节且 `obsidian` 保持外部化。GitHub Actions 流水线已定义但**尚未在远端实跑**（分支尚未推送），因此 Issue #1 的「CI 流水线成功跑通」验收项仍处于未验证状态。
 
 ---
 
@@ -47,12 +47,21 @@
     - Bug #9~#10（断线重连状态 / 未闭合 Markdown 渲染）
     - Documentation #11（快速上手指引）
     - Technical Debt #12（端到端 Mock Server 集成测试套件）
+- [x] **Issue #1 工程基础设施本地实现完成（分支 `feat/issue-1-plugin-scaffold`，未推送）**：
+  - 工程基线：TypeScript 5.9 严格模式、ESLint 10 flat config、Vitest 3.2（`obsidian` 运行时别名指向 `tests/__mocks__/obsidian.ts`）。
+  - 构建链：esbuild 单文件 CommonJS 构建，`obsidian` 与 Node 内置模块外部化；`scripts/verify-bundle.mjs` 断言产物存在、体积 `< 200KB`、`obsidian` 未内联、manifest 与 package 版本一致（负向验证：超限/内联/缺失三种情形均以非 0 退出码失败）。
+  - 测试基线：冒烟测试覆盖插件实例化、`onload` 注册视图与命令、`onunload` 卸载视图；manifest 一致性测试覆盖版本同步与必填字段。
+  - 流水线与治理：`ci.yml`（PR + main push 门禁）、`release.yml`（仅 `v*` tag 触发，Agent 永不推送 tag）、Issue/PR 模板、README 目录结构与开发命令。
+  - 实测证据：`npm run typecheck` 零错误、`npm run lint` 零告警、`npm test` 5/5 通过、`npm run build` 产出 `main.js` 943 字节。
 
 ---
 
 ## 3. 正在开发的 Issue (Active Issues)
 
-- **当前无正在开发的业务 Issue**（等待用户确认首个启动的 Issue）。
+- **Issue #1（工程基础设施搭建与基础插件脚手架）**：实现已完成，等待推送授权、独立 Code Review 与 PR 评审。
+  - 计划文档：`docs/superpowers/plans/2026-11-18-issue-1-plugin-scaffold.md`
+  - 特性分支：`feat/issue-1-plugin-scaffold`（基于 `main`）
+- 后续 Issue（#2~#8、#11、#12）尚未启动，依赖 Issue #1 合并后推进。
 - Issue 清单与远程地址（仓库 `sido-meet/t3-codian`）：
   - #1 https://github.com/sido-meet/t3-codian/issues/1
   - #2 https://github.com/sido-meet/t3-codian/issues/2
@@ -71,12 +80,14 @@
 
 ## 4. 阻塞问题 (Blockers)
 
-- **当前无技术与外部阻塞项（No Blockers）**。
+- **推送授权待确认**：AGENTS.md 要求远程 Push 前须取得用户明确授权，因此分支尚未推送，CI 未能实跑。
+- **GitHub Actions 未实跑**：Issue #1 验收标准「CI 流水线成功跑通」在远端验证前不视为完成。
 
 ---
 
 ## 5. 下一步任务 (Next Tasks)
 
-1. **选择并启动首个开发 Issue**（推荐 **Issue #1: [Feature] 工程基础设施搭建与基础插件脚手架**）。
-2. **创建特性分支**：基于 `main` 拉取 `feat/issue-1-plugin-scaffold`，遵循 TDD 与 Superpowers 开始实现。
-3. **提交 PR 并请求独立 Code Review**：合并权限保留给用户，Agent 严禁自行合并。
+1. **取得推送授权并推送 `feat/issue-1-plugin-scaffold`**，触发 GitHub Actions CI 实跑并回填 run 链接。
+2. **完成独立 Code Review 与整分支复审**，闭环全部发现项。
+3. **发起 PR**（关联 Issue #1），合并权限保留给用户，Agent 严禁自行合并、严禁推送 `v*` tag。
+4. **启动 Issue #2（配置管理与设置选项卡）**，依赖 Issue #1 合并完成。
