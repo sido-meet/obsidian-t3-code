@@ -25,18 +25,16 @@
 - [x] **本地 Git 仓库初始化**：
   - 目标目录 `E:\Projects\T3-Codian` 完成 Git 仓库初始化，默认主干分支为 `main`。
   - 配置工程级 `.gitignore`（过滤 `node_modules`、构建产物、测试 Vault 及敏感凭证）。
-- [x] **工程管理规范体系建立**：
-  - 编写并发布 `AGENTS.md`（建立包含 15 条铁律的 Agent 强制行为规约）。
-  - 编写项目概览 `README.md`、协作指南 `CONTRIBUTING.md`。
-  - 编写产品需求 `docs/PRD.md`、架构设计 `docs/ARCHITECTURE.md`、开发工作流 `docs/WORKFLOW.md`。
-  - 确立 ADR 决策机制，沉淀首份架构决策记录 `docs/adr/0001-init-project-and-engineering-governance.md`。
+- [x] **远程 GitHub 仓库创建与首次推送**：
+  - 成功创建公开仓库：https://github.com/sido-meet/t3-codian
+  - 配置远程源 `origin`（`git@github.com:sido-meet/t3-codian.git`），完成 `main` 分支上游跟踪推送。
 
 ---
 
 ## 3. 正在开发的 Issue (Active Issues)
 
 - **当前无正在开发的业务 Issue**。
-- 待用户审查批准工程初始化成果后，将正式规划并启动：
+- 即将正式规划并启动：
   - **Issue #1**：Obsidian 基础插件脚手架与 TypeScript/esbuild 构建环境搭建。
   - **Issue #2**：T3 Code ACP 通信协议客户端契约定义与 Mock 测试。
 
@@ -44,16 +42,12 @@
 
 ## 4. 阻塞问题 (Blockers)
 
-- **当前无技术阻塞项（No Technical Blockers）**。
-- **外部依赖等待项**：
-  - 需等待用户确认工程初始化结果。
-  - 远程 GitHub 仓库（`t3-codian`）尚未创建或绑定，待用户明确授权确认后执行。
+- **当前无技术与外部阻塞项（No Blockers）**。
 
 ---
 
 ## 5. 下一步任务 (Next Tasks)
 
-1. **用户确认与签署**：汇报初始化成果，等待用户确认验收。
-2. **远程仓库同步**：经用户授权后，使用 `gh repo create` 创建远程 `t3-codian` 仓库并建立首次推送。
-3. **脚手架与依赖安装（阶段 1 启动）**：创建 `package.json`、`tsconfig.json`、`manifest.json`，配置 `esbuild` 与 `vitest`。
-4. **特性分支开辟**：基于 `main` 分支拉取第一条特性分支 `feat/issue-1-plugin-scaffold`，进入 TDD 开发闭环。
+1. **规划并创建 GitHub Issue #1**：明确 Obsidian 插件脚手架与编译流水线的验收标准。
+2. **开辟首条特性分支**：基于 `main` 分支拉取 `feat/issue-1-plugin-scaffold`，进入 TDD 开发闭环。
+3. **工程脚手架配置**：编写 `package.json`、`tsconfig.json`、`manifest.json`，配置 `esbuild` 与 `vitest`。
