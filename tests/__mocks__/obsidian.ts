@@ -57,7 +57,7 @@ export class Plugin {
     return command;
   }
 
-  registerSettingsTab(tab: unknown): void {
+  addSettingTab(tab: unknown): void {
     this.settingsTabs.push(tab);
   }
 

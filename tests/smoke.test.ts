@@ -3,6 +3,14 @@ import { App } from 'obsidian';
 import type { PluginManifest } from 'obsidian';
 import { describe, expect, it } from 'vitest';
 
+interface RegisteredView {
+  type: string;
+  factory: (leaf: unknown) => { getViewType(): string };
+}
+
+const getRegisteredViews = (plugin: T3CodianPlugin): RegisteredView[] =>
+  (plugin as unknown as { registeredViews: RegisteredView[] }).registeredViews;
+
 const manifest: PluginManifest = {
   id: 't3-codian',
   name: 'T3-Codian',
@@ -34,6 +42,16 @@ describe('T3-Codian plugin', () => {
         callback: expect.any(Function),
       },
     ]));
+  });
+
+  it('registers a chat view factory that produces the registered view type', async () => {
+    const plugin = new T3CodianPlugin(new App(), manifest);
+    await plugin.onload();
+
+    const [registeredView] = getRegisteredViews(plugin);
+
+    expect(registeredView.type).toBe('t3-codian-chat-view');
+    expect(registeredView.factory({}).getViewType()).toBe('t3-codian-chat-view');
   });
 
   it('detaches its chat view on unload', async () => {

@@ -110,7 +110,7 @@ t3-codian/
     registerView(type: string, factory: unknown): void;
     addRibbonIcon(icon: string, title: string, callback: () => void): unknown;
     addCommand(command: unknown): unknown;
-    registerSettingsTab(tab: unknown): void;
+    addSettingTab(tab: unknown): void;
     onload(): Promise<void>;
     onunload(): Promise<void>;
   }
@@ -189,8 +189,7 @@ t3-codian/
   ```
   预期：FAIL，报错指向 `Failed to resolve import "../src/main"`（文件尚不存在）或 `src/main.ts` 未导出默认类。
 
-- [ ] **Step 9: 写入 `tests/__mocks__/obsidian.ts`**
-  提供上列 `App`、`Plugin`、`PluginManifest`；`Plugin` 的 `registerView`/`addRibbonIcon`/`addCommand`/`registerSettingsTab` 均以数组形式记录调用以便断言；`loadData` 返回 `Promise.resolve(null)`，`saveData` 返回 `Promise.resolve()`；`App` 暴露 `workspace` 空对象占位。仅实现 Task 1 需要的面，其余 Obsidian API 留待后续 Task 按需扩展（YAGNI，避免 Mock 腐化）。
+  提供上列 `App`、`Plugin`、`PluginManifest`；`Plugin` 的 `registerView`/`addRibbonIcon`/`addCommand`/`addSettingTab` 均以数组形式记录调用以便断言；`loadData` 返回 `Promise.resolve(null)`，`saveData` 返回 `Promise.resolve()`；`App` 暴露 `workspace` 空对象占位。仅实现 Task 1 需要的面，其余 Obsidian API 留待后续 Task 按需扩展（YAGNI，避免 Mock 腐化）。
 
 - [ ] **Step 10: 写入最小实现 `src/main.ts`**
   默认导出 `T3CodianPlugin extends Plugin`；`onload()` 中调用 `this.registerView('t3-codian-chat-view', () => ({ getViewType: () => 't3-codian-chat-view' }))` 与 `this.addCommand({ id: 't3-codian-open-chat', name: '打开 T3-Codian 聊天面板', callback: () => {} })`；`onunload()` 空实现但保留 `async` 签名。**不实现**任何 UI、网络或设置逻辑（属后续 Issue）。
