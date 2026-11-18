@@ -78,6 +78,17 @@ describe('T3-Codian plugin', () => {
     );
   });
 
+  it('keeps the command harmless when no right sidebar leaf is available', async () => {
+    const plugin = new T3CodianPlugin(new App(), manifest);
+    await plugin.onload();
+    (plugin.app.workspace as unknown as { rightLeafAvailable: boolean }).rightLeafAvailable = false;
+
+    const [command] = getRegisteredCommands(plugin);
+
+    expect(() => command.callback()).not.toThrow();
+    expect(plugin.app.workspace).toHaveProperty('activatedViewTypes', []);
+  });
+
   it('releases registered resources and detaches its chat view on unload', async () => {
     const plugin = new T3CodianPlugin(new App(), manifest);
     await plugin.onload();

@@ -11,9 +11,10 @@ export class WorkspaceLeafStub {
 export class Workspace {
   readonly activatedViewTypes: string[] = [];
   readonly detachedViewTypes: string[] = [];
+  rightLeafAvailable = true;
 
   getRightLeaf(_split: boolean): WorkspaceLeafStub | null {
-    return new WorkspaceLeafStub(this);
+    return this.rightLeafAvailable ? new WorkspaceLeafStub(this) : null;
   }
 
   detachLeavesOfType(type: string): void {
