@@ -49,3 +49,7 @@ logs/
 *.log
 tmp/
 temp/
+
+# Test and lint outputs
+coverage/
+.eslintcache
