@@ -28,6 +28,10 @@
 - [x] **远程 GitHub 仓库创建与首次推送**：
   - 成功创建公开仓库：https://github.com/sido-meet/t3-codian
   - 配置远程源 `origin`（`git@github.com:sido-meet/t3-codian.git`），完成 `main` 分支上游跟踪推送。
+- [x] **三大参考项目深度技术调研与方案对比**：
+  - 深度阅读并剖析 `YishenTu/claudian`、`pingdotgg/t3code`、`7bgsbm749g-boop/t3-obsidian` 三大源码库。
+  - 完成 4 份调研与对比决策报告：`docs/research/claudian.md`、`docs/research/t3code.md`、`docs/research/t3-obsidian.md`、`docs/research/architecture-comparison.md`。
+  - 确立以“方案 D（深度原生 UI + T3 V2 协议桥接）”为核心推荐的技术路径。
 
 ---
 

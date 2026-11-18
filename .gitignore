@@ -41,6 +41,9 @@ Desktop.ini
 !.vscode/extensions.json
 !.vscode/settings.json
 
+# Research repositories clone
+.research_repos/
+
 # Logs and temporary files
 logs/
 *.log
