@@ -14,6 +14,10 @@ export default defineConfig({
       provider: 'v8',
       include: ['src/**'],
       reporter: ['text', 'html'],
+      thresholds: {
+        'src/context.ts': { branches: 100, functions: 100, lines: 100, statements: 100 },
+        'src/t3/{rpc,transcript}.ts': { branches: 100, functions: 100, lines: 100, statements: 100 },
+      },
     },
   },
 });

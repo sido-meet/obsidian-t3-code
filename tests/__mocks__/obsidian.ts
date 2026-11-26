@@ -5,13 +5,25 @@ export class WorkspaceLeafStub {
 
   async setViewState(viewState: { type: string }): Promise<void> {
     this.workspace.activatedViewTypes.push(viewState.type);
+    this.workspace.leaves.set(viewState.type, this);
   }
 }
 
 export class Workspace {
   readonly activatedViewTypes: string[] = [];
   readonly detachedViewTypes: string[] = [];
+  readonly revealedLeaves: WorkspaceLeafStub[] = [];
+  readonly leaves = new Map<string, WorkspaceLeafStub>();
   rightLeafAvailable = true;
+
+  getLeavesOfType(type: string): WorkspaceLeafStub[] {
+    const leaf = this.leaves.get(type);
+    return leaf ? [leaf] : [];
+  }
+
+  async revealLeaf(leaf: WorkspaceLeafStub): Promise<void> {
+    this.revealedLeaves.push(leaf);
+  }
 
   getRightLeaf(_split: boolean): WorkspaceLeafStub | null {
     return this.rightLeafAvailable ? new WorkspaceLeafStub(this) : null;
@@ -90,4 +102,8 @@ export class Plugin {
     this.registeredEvents.length = 0;
     this.registeredCallbacks.length = 0;
   }
+}
+
+export class PluginSettingTab {
+  constructor(public app: App, public plugin: Plugin) {}
 }

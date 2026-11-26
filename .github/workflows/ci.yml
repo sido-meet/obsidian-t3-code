@@ -33,7 +33,7 @@ jobs:
       - name: Lint
         run: npm run lint
       - name: Unit & Integration Tests
-        run: npm test
+        run: npm run test:coverage
       - name: Build plugin artifact
         run: npm run build
       - name: Verify build artifacts
@@ -41,3 +41,4 @@ jobs:
         run: |
           test -f main.js || exit 1
           test -f manifest.json || exit 1
+          test -f styles.css || exit 1

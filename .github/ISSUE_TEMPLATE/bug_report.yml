@@ -1,5 +1,5 @@
 name: Bug 报告
-description: 报告 T3-Codian 的缺陷，并附带可复现步骤与环境信息
+description: 报告 Obsidian T3 Code 的缺陷，并附带可复现步骤与环境信息
 title: "[Bug] "
 labels: ["type:bug"]
 body:

@@ -1,8 +1,8 @@
-# T3-Codian 质量保障与测试策略 (TESTING)
+# Obsidian T3 Code 质量保障与测试策略 (TESTING)
 
 > **文档版本**：v1.0.0  
-> **适用范围**：T3-Codian 插件全生命周期测试  
-> **责任人**：T3-Codian 质量保障与技术研发团队
+> **适用范围**：Obsidian T3 Code 插件全生命周期测试
+> **责任人**：Obsidian T3 Code 质量保障与技术研发团队
 
 ---
 

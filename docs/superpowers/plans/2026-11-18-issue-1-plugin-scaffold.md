@@ -250,7 +250,7 @@ t3-codian/
   预期：FAIL，报错为读取 `manifest.json` 时的 `ENOENT`。
 
 - [ ] **Step 3: 写入 `manifest.json`**
-  内容固定：`{ "id": "t3-codian", "name": "T3-Codian", "version": "0.1.0", "minAppVersion": "1.5.0", "description": "T3 Code Agent integration for Obsidian", "author": "T3-Codian Team", "authorUrl": "https://github.com/sido-meet/t3-codian", "isDesktopOnly": true }`，`version` 必须与 `package.json` 一致。
+  内容固定：`{ "id": "t3-codian", "name": "T3-Codian", "version": "0.1.0", "minAppVersion": "1.5.0", "description": "T3 Code Agent integration for Obsidian", "author": "T3-Codian Team", "authorUrl": "https://github.com/sido-meet/obsidian-t3-code", "isDesktopOnly": true }`，`version` 必须与 `package.json` 一致。
 
 - [ ] **Step 4: 写入 `esbuild.config.mjs`**
   使用 `esbuild.context()` 构建：`absWorkingDir` 取配置文件所在目录（`fileURLToPath(new URL(".", import.meta.url))`），使构建不依赖进程当前工作目录；`entryPoints: ["src/main.ts"]`、`bundle: true`、`format: "cjs"`、`platform: "browser"`、`target: "es2018"`、`outfile: "main.js"`、`external: ["obsidian", "electron", "node:*", ...builtinModules]`、`minify: production`、`sourcemap: production ? false : "external"`、`logLevel: "info"`。脚本入口以 `process.argv.includes("--production")` 判定生产模式：生产模式 `rebuild()` 后 `dispose()` 退出；开发模式保持 `watch()` 常驻（dev 产物会覆写 `main.js`，README 需注明）。

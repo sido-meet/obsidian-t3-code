@@ -1,32 +1,67 @@
-import { Plugin } from 'obsidian';
-import type { App, PluginManifest } from 'obsidian';
-import T3CodianView, { VIEW_TYPE_T3_CODIAN } from './ui/T3CodianView';
+import { Notice, Plugin } from 'obsidian';
+import type { App, PluginManifest, WorkspaceLeaf } from 'obsidian';
+import { normalizeSettings } from './settings';
+import type { Settings } from './settings';
+import { SettingsTab } from './settings-tab';
+import ObsidianT3CodeView, { VIEW_TYPE_OBSIDIAN_T3_CODE } from './ui/ObsidianT3CodeView';
 
-export default class T3CodianPlugin extends Plugin {
-  constructor(app: App, manifest: PluginManifest) {
-    super(app, manifest);
+export default class ObsidianT3CodePlugin extends Plugin {
+  settings = normalizeSettings(null);
+  private saving = Promise.resolve();
+  private opening?: Promise<WorkspaceLeaf>;
+  private unloaded = false;
+
+  async updateSettings(patch: Partial<Settings>): Promise<void> {
+    const write = this.saving.then(async () => {
+      const settings = { ...this.settings, ...patch };
+      await this.saveData(settings);
+      const changedOrigin = settings.origin !== this.settings.origin;
+      this.settings = settings;
+      if (changedOrigin) {
+        for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE)) {
+          if (leaf.view instanceof ObsidianT3CodeView) leaf.view.addressChanged();
+        }
+      }
+    });
+    this.saving = write.catch(() => undefined);
+    return write;
   }
 
+  constructor(app: App, manifest: PluginManifest) { super(app, manifest); }
+
   async onload(): Promise<void> {
-    this.registerView(VIEW_TYPE_T3_CODIAN, (leaf) => new T3CodianView(leaf));
+    this.settings = normalizeSettings(await this.loadData());
+    this.addSettingTab(new SettingsTab(this.app, this));
+    this.registerView(VIEW_TYPE_OBSIDIAN_T3_CODE, leaf => new ObsidianT3CodeView(leaf, this));
+    this.addRibbonIcon('message-square', 'Obsidian T3 Code', () => this.openChatView());
     this.addCommand({
-      id: 't3-codian-open-chat',
-      name: '打开 T3-Codian 聊天面板',
+      id: 'obsidian-t3-code-open-chat',
+      name: '打开 Obsidian T3 Code 聊天面板',
       callback: () => this.openChatView(),
     });
   }
 
   onunload(): void {
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE_T3_CODIAN);
+    this.unloaded = true;
+    this.app.workspace.detachLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE);
     super.onunload();
   }
 
   private openChatView(): void {
-    const leaf = this.app.workspace.getRightLeaf(false);
-    if (!leaf) {
-      return;
+    const workspace = this.app.workspace;
+    if (!this.opening) {
+      const existing = workspace.getLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE)[0];
+      if (existing) {
+        void workspace.revealLeaf(existing).catch(() => new Notice('无法显示 Obsidian T3 Code 侧栏。'));
+        return;
+      }
+      const leaf = workspace.getRightLeaf(false);
+      if (!leaf) return;
+      this.opening = leaf.setViewState({ type: VIEW_TYPE_OBSIDIAN_T3_CODE, active: true })
+        .then(() => leaf).finally(() => { this.opening = undefined; });
     }
-
-    void leaf.setViewState({ type: VIEW_TYPE_T3_CODIAN });
+    void this.opening.then(leaf => {
+      if (!this.unloaded) return workspace.revealLeaf(leaf);
+    }).catch(() => new Notice('无法显示 Obsidian T3 Code 侧栏。'));
   }
 }

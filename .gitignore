@@ -9,7 +9,6 @@ lerna-debug.log*
 # Build outputs
 main.js
 *.map
-styles.css
 manifest.json.bak
 dist/
 build/

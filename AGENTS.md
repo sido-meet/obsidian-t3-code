@@ -1,6 +1,6 @@
-# T3-Codian Agent 工程规范与行为约束指南
+# Obsidian T3 Code Agent 工程规范与行为约束指南
 
-> 本文档是所有参与 T3-Codian 项目的 AI Agent（包括 Antigravity、Codex、Claude 等）必须严格遵守的不可违背法则（Non-negotiable Rules）。任何 Agent 在开始执行任务前，必须通读并严格履行本文档定义的全部要求。
+> 本文档是所有参与 Obsidian T3 Code 项目的 AI Agent（包括 Antigravity、Codex、Claude 等）必须严格遵守的不可违背法则（Non-negotiable Rules）。任何 Agent 在开始执行任务前，必须通读并严格履行本文档定义的全部要求。
 
 ---
 
