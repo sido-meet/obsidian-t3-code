@@ -1,5 +1,14 @@
-import { loopbackOrigin } from '../settings';
 import { record, T3Rpc } from './rpc';
+
+function loopbackOrigin(value: string): string {
+  const url = new URL(value);
+  if (!['http:', 'https:'].includes(url.protocol) ||
+      !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
+      url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('请输入本地 T3 服务地址，例如 http://127.0.0.1:3425。');
+  }
+  return url.origin;
+}
 
 export interface T3Project {
   id: string;

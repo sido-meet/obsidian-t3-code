@@ -7,3 +7,7 @@ export function workspacesOverlap(first: string, second: string): boolean {
   };
   return contains(first, second) || contains(second, first);
 }
+
+export function resolveWorkspacePath(configuredPath: string, vaultPath: string): string {
+  return configuredPath || vaultPath;
+}
