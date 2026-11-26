@@ -18,6 +18,6 @@
 | 选区与采纳 | 在临时 Vault 选中测试文字，Codex 返回了该选区原文。点击插入后，回复准确写入光标位置。 |
 | 工程门禁 | 47 个本地测试通过，协议帧解析、会话投影和笔记上下文模块的行、语句、函数及分支覆盖率均为 100%。构建体积约 157 KiB。 |
 | 独立审查 | 审查发现并修复了重复侧栏、半开连接、快照竞态、重连次数继承、历史消息反复渲染和 Vault Markdown 处理器触发问题。 |
-| GitHub Actions | 本地分支等待推送授权，尚未运行 PR 远端 CI。 |
+| GitHub Actions | 推送已获授权。Windows 与 Ubuntu 的 CI 结果以 [GitHub Actions](https://github.com/sido-meet/obsidian-t3-code/actions) 为准。 |
 
 历史会话目录、桌面端双向会话恢复和侧栏内审批按现有 P0 范围留待后续。MVP 内 Codex 需要用户处理审批时会引导至 T3 Code。
