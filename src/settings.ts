@@ -1,25 +1,44 @@
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import type { ModelSelection } from './t3/cli';
+
 export interface Settings {
-  origin: string;
+  cliPath: string;
+  projectPath: string;
+  projectId: string;
+  provider: string;
+  model: string;
+  modelPresets: string;
   includeNote: boolean;
 }
 
-export const DEFAULT_ORIGIN = 'http://127.0.0.1:3425';
-
-export function loopbackOrigin(value: string): string {
-  const url = new URL(value);
-  if (!['http:', 'https:'].includes(url.protocol) ||
-      !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname) ||
-      url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('请输入本地 T3 服务地址，例如 http://127.0.0.1:3425。');
-  }
-  return url.origin;
-}
+const defaultCliPath = process.platform === 'win32' ? join(homedir(), '.t3', 'bin', 't3.cmd') : 't3';
 
 export function normalizeSettings(value: unknown): Settings {
   const saved = value as Partial<Settings> | null | undefined;
-  let origin = DEFAULT_ORIGIN;
-  if (typeof saved?.origin === 'string') {
-    try { origin = loopbackOrigin(saved.origin); } catch { /* Keep the local default. */ }
+  return {
+    cliPath: (typeof saved?.cliPath === 'string' && saved.cliPath.trim()) || defaultCliPath,
+    projectPath: typeof saved?.projectPath === 'string' ? saved.projectPath.trim() : '',
+    projectId: typeof saved?.projectId === 'string' ? saved.projectId.trim() : '',
+    provider: (typeof saved?.provider === 'string' && saved.provider.trim()) || 'codex',
+    model: (typeof saved?.model === 'string' && saved.model.trim()) || 'gpt-6-astra',
+    modelPresets: typeof saved?.modelPresets === 'string' ? saved.modelPresets : '',
+    includeNote: saved?.includeNote === true,
+  };
+}
+
+export function configuredModels(settings: Pick<Settings, 'provider' | 'model' | 'modelPresets'>): ModelSelection[] {
+  const selections: ModelSelection[] = [{ provider: settings.provider, model: settings.model }];
+  const names = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/;
+  const options = /^[a-zA-Z][a-zA-Z0-9_-]*=[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+  for (const line of settings.modelPresets.split(/\r?\n/)) {
+    const [provider, model, option, extra] = line.split('|').map(part => part.trim());
+    if (extra !== undefined || !names.test(provider ?? '') || !names.test(model ?? '') ||
+        (option && !options.test(option))) continue;
+    const selection = { provider, model, ...(option ? { option } : {}) };
+    if (!selections.some(item => item.provider === provider && item.model === model && item.option === selection.option)) {
+      selections.push(selection);
+    }
   }
-  return { origin, includeNote: saved?.includeNote === true };
+  return selections;
 }

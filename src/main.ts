@@ -13,13 +13,17 @@ export default class ObsidianT3CodePlugin extends Plugin {
 
   async updateSettings(patch: Partial<Settings>): Promise<void> {
     const write = this.saving.then(async () => {
-      const settings = { ...this.settings, ...patch };
+      const settings = normalizeSettings({ ...this.settings, ...patch });
       await this.saveData(settings);
-      const changedOrigin = settings.origin !== this.settings.origin;
+      const changedBackend = settings.cliPath !== this.settings.cliPath || settings.projectPath !== this.settings.projectPath || settings.projectId !== this.settings.projectId;
+      const changedModels = settings.provider !== this.settings.provider || settings.model !== this.settings.model ||
+        settings.modelPresets !== this.settings.modelPresets;
       this.settings = settings;
-      if (changedOrigin) {
+      if (changedBackend || changedModels) {
         for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE)) {
-          if (leaf.view instanceof ObsidianT3CodeView) leaf.view.addressChanged();
+          if (!(leaf.view instanceof ObsidianT3CodeView)) continue;
+          if (changedBackend) leaf.view.backendChanged();
+          else leaf.view.modelsChanged();
         }
       }
     });

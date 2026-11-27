@@ -221,3 +221,7 @@ export interface ISessionService {
 桌面插件以实际验证的 T3 Orchestrator v2 服务契约为准。客户端发现服务后，通过 `/oauth/token` 交换一次性配对码，仅申请编排读取和操作权限，再通过 `/api/auth/websocket-ticket` 取得一次性连接票据。实时通信使用 `/ws` 上的 Effect RPC，通过 `orchestration.dispatchCommand` 创建线程和派发消息，通过 `orchestration.subscribeThread` 应用快照和增量事件。文中的接口命名与时序图用于说明设计，具体请求与模块见 `src/t3/`。
 
 已完成的模型回复通过不调用 Vault 处理器的 Markdown 渲染器展示。代码围栏只用于显示和语法高亮，HTML 与图片嵌入保持静态。复制和显式插入仍使用原始 Markdown。
+
+## CLI 迁移
+
+`feat/6-sidebar-layout` 的桌面侧栏执行 [ADR 0002](adr/0002-t3-cli-backend.md)。本文件中的 WebSocket、配对和流式投影设计描述 PR #13 基线。

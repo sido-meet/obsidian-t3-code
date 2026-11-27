@@ -1,18 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeSettings } from '../src/settings';
+import { configuredModels, normalizeSettings } from '../src/settings';
 import { composePrompt } from '../src/context';
 
 describe('MVP input boundaries', () => {
-  it('defaults to the local service for absent and invalid settings', () => {
-    for (const input of [null, { origin: 'https://example.org/secret' }, { origin: 'file:///tmp' }]) {
-      expect(normalizeSettings(input).origin).toBe('http://127.0.0.1:3425');
-    }
+  it('preserves note preferences when migrating from the paired backend', () => {
+    const settings = normalizeSettings({ origin: 'http://localhost:1234/', includeNote: true });
+    expect(settings.cliPath).toMatch(/t3(?:\.cmd)?$/);
+    expect(settings.projectPath).toBe('');
+    expect(settings.includeNote).toBe(true);
   });
 
-  it('accepts a custom loopback port and removes a trailing slash', () => {
-    expect(normalizeSettings({ origin: 'http://localhost:1234/' }).origin).toBe('http://localhost:1234');
+  it('normalizes the configured paths without changing spaces in folder names', () => {
+    expect(normalizeSettings({ cliPath: ' /opt/t3 ', projectPath: ' /data/Project A ' }))
+      .toEqual({ cliPath: '/opt/t3', projectPath: '/data/Project A', projectId: '', provider: 'codex', model: 'gpt-6-astra', modelPresets: '', includeNote: false });
   });
-
   it('includes the selection ahead of the full note', () => {
     expect(composePrompt('Summarize', { path: 'Draft.md', selection: 'Chosen', body: 'Private remainder' }))
       .toBe('Summarize\n\n<note-context>\nPath: Draft.md\nChosen\n</note-context>');
@@ -27,4 +28,14 @@ describe('MVP input boundaries', () => {
     expect(prompt).toContain('x'.repeat(8000) + '\n[内容已截断]');
     expect(prompt).not.toContain('x'.repeat(8001));
   });
+});
+
+it('groups configured presets without inventing model support', () => {
+  expect(configuredModels({
+    provider: 'codex', model: 'gpt-base',
+    modelPresets: 'codex | gpt-base\nclaude-work | sonnet | effort=high\nclaude-work | sonnet | effort=high\nbroken\nclaude-work | opus | --bad',
+  })).toEqual([
+    { provider: 'codex', model: 'gpt-base' },
+    { provider: 'claude-work', model: 'sonnet', option: 'effort=high' },
+  ]);
 });
