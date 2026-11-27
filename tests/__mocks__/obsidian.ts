@@ -107,3 +107,34 @@ export class Plugin {
 export class PluginSettingTab {
   constructor(public app: App, public plugin: Plugin) {}
 }
+
+export class FileSystemAdapter {
+  constructor(private readonly basePath: string) {}
+  getBasePath(): string { return this.basePath; }
+}
+
+export class MarkdownView {
+  file?: { path: string; name: string; basename: string };
+  editor = {
+    getSelection: () => '',
+    getValue: () => '',
+    getCursor: () => ({ line: 0, ch: 0 }),
+    replaceRange: (_text: string, _pos: unknown) => undefined,
+  };
+}
+
+export class FuzzySuggestModal<T> {
+  constructor(public app: App) {}
+  getItems(): T[] { return []; }
+  getItemText(_item: T): string { return ''; }
+  onChooseItem(_item: T): void {}
+  open(): void {}
+}
+
+export class Notice {
+  constructor(public message: string) {}
+}
+
+export function setIcon(el: HTMLElement, name: string): void {
+  el.setAttribute('data-icon', name);
+}

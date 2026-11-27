@@ -37,3 +37,21 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
 独立审查记录：已处理 Windows 批处理子进程取消、切换项目时草稿隔离、异步读取期间附件锁定、旧会话轮询覆盖和项目绑定。公开 CLI 缺少根目录查验命令，因此设置绑定的项目 ID 用于派发，并用路径查询的会话列表交叉检查，已有会话缺少「需要审批」时限制 Vault 发送。新会话仍继承 T3 项目默认权限。
 
 本地验收：类型检查、Lint、56 项测试、覆盖率门禁及生产构建通过。隔离 Obsidian 与真实 CLI 验证了模型推理选项、笔记附件、回复、历史恢复、草稿和实际权限。浅色与深色在 240、320、480 像素下均无横向溢出。
+
+
+---
+
+## 2026-11-27 — 侧栏 V2 重构（分支 `feat/sidebar-v2-redesign`）
+
+- **状态**：已在独立 worktree（`feat/sidebar-v2-redesign`）完成实现、独立只读 Code Review 及全量验证（尚未推送或合并到 `main`）。
+- **核心改动**：
+  - 扩展 `src/t3/cli.ts` `CliThread` / `readThread()` 可选元数据解析（`settled`、`pinned`、`snoozed`、`archived`、`parentThreadId`、`relationshipToParent`、`pendingRequestCount`、`createdAt`、`updatedAt`）。
+  - 新增纯逻辑模块 `src/ui/sidebar-model.ts` 及单元测试 `tests/sidebar-model.test.ts`。
+  - 重构 `src/ui/ObsidianT3CodeView.ts` 与 `styles.css`，落地零顶栏、异常专用横幅、`>= 600px` 持久会话侧栏与可拖拽分割线、`< 300px` 紧凑布局、多标签独立状态隔离、固定高度三列 `Agent · 模型 · 思考度` 弹层、诚实 `—` 用量提示、只读权限说明与框外笔记注脚切换；新增 UI 集成测试 `tests/sidebar-view.test.ts`。
+  - 修复 `.eslint`（`eslint.config.mjs` 忽略 `.research_repos/**`）并消除独立 Code Review 指出的无障碍嵌套按钮、`Escape` 焦点管理、断连与失活标签异步竞态、已连接报错可见性及符号链接 Vault 安全检查问题。
+- **验证结果（worktree 内最后一次代码改动后实测）**：
+  - `npm run typecheck`：通过（0 错误）
+  - `npm run lint`：`eslint . --max-warnings=0` 通过（0 警告/错误）
+  - `npm run test:coverage`：15 个测试文件 / 71 条测试全部通过（总覆盖率 `85.96%` Stmts / `81.33%` Branch / `89.5%` Funcs；`sidebar-model.ts`、`context.ts`、`rpc.ts`、`transcript.ts`、`workspace.ts`、`markdown.ts`、`note-attachments.ts` 均 100%；`ObsidianT3CodeView.ts` `85.55%` Stmts / `88.6%` Funcs）
+  - `npm run build`：`main.js` `192,341` 字节（`< 204,800` 字节上限），bundle 校验通过
+- **待办**：等待用户审阅分支改动并决定是否发起/合并 PR。
