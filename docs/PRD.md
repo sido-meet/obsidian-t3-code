@@ -1,9 +1,9 @@
-# T3-Codian 产品需求文档 (PRD)
+# Obsidian T3 Code 产品需求文档 (PRD)
 
-> **项目名称**：T3-Codian  
+> **项目名称**：Obsidian T3 Code
 > **文档版本**：v1.0.0 (MVP 阶段定义)  
 > **状态**：评审中 (Under Review)  
-> **维护责任人**：T3-Codian 团队（产品经理 & 技术负责人）  
+> **维护责任人**：Obsidian T3 Code 团队（产品经理 & 技术负责人）
 > **基线日期**：2026-11-18
 
 ---
@@ -14,7 +14,7 @@ Obsidian 作为以“本地优先（Local-First）”、“双向链接”和 Ma
 
 与此同时，**T3 Code** 已经构建了工业级的多智能体编排平台，原生支持由 ChatGPT 账号授权的 **Codex**、Google Antigravity 与 Claude 等顶尖编程 Agent，具备完整的 Git Worktree 隔离、MCP 工具生态与任务委派能力。
 
-**T3-Codian 的核心使命**：以极度轻量、安全、原生的方式，将 T3 Code 的自主 Agent（优先接入 Codex）引入 Obsidian，赋能知识库的深度对话、智能检索与内容共创。
+**Obsidian T3 Code 的核心使命**：以极度轻量、安全、原生的方式，将 T3 Code 的自主 Agent（优先接入 Codex）引入 Obsidian，赋能知识库的深度对话、智能检索与内容共创。
 
 ---
 
@@ -60,7 +60,7 @@ Obsidian 作为以“本地优先（Local-First）”、“双向链接”和 Ma
 | **F-01: 插件生命周期与配置** | 插件在 Obsidian 中稳定加载并支持配置服务连接地址。 | 初次安装配置 | Obsidian Plugin API, `LocalStorage` | 低 | 1. 在 Obsidian 社区插件列表无错误加载；<br>2. 设置页可保存 T3 服务地址（默认 `http://127.0.0.1:3425`）；<br>3. 重启 Obsidian 后配置不丢失。 |
 | **F-02: T3 Code 状态探测与连接** | 自动发现本地 T3 Code 服务端并建立 WebSocket 通信。 | 启动与运行时保活 | 原生 `fetch`, `WebSocket`, `/.well-known/t3/environment` | 中 | 1. 成功获取 `environmentId` 与协议版本 2；<br>2. 建立 WebSocket 长连接，支持心跳探测与网络断开提示；<br>3. T3 服务未开启时，展示友好指引卡片而非白屏崩溃。 |
 | **F-03: 侧边栏 Agent 聊天视图** | 提供原生主题适配的侧边栏交互窗口。 | 日常对话与交互 | Obsidian `ItemView`, Markdown 渲染器 | 中 | 1. 点击 Ribbon 图标或命令面板可打开侧边栏视图；<br>2. 完美适配 Obsidian 当前主题（亮色/暗色变量）；<br>3. 包含消息输入框、发送按钮、清空/新建按钮。 |
-| **F-04: 基于 Codex 的流式对话** | 与 ChatGPT 授权的 Codex 顺畅交流，流式输出回答。 | 发起提问与推理 | T3 Orchestrator V2 协议 (`dispatch`, `turn/start`) | 中 | 1. 发送 Prompt 后秒级出现流式 Token；<br>2. 支持中途“停止生成（Stop）”；<br>3. 完整支持 Markdown 代码块语法高亮。 |
+| **F-04: 基于 Codex 的流式对话** | 与 ChatGPT 授权的 Codex 顺畅交流，流式输出回答。 | 发起提问与推理 | T3 Orchestrator V2 (`orchestration.dispatchCommand`, `message.dispatch`) | 中 | 1. 发送 Prompt 后秒级出现流式 Token；<br>2. 支持中途“停止生成（Stop）”；<br>3. 完整支持 Markdown 代码块语法高亮。 |
 | **F-05: 活动笔记与选区上下文注入** | 提问时自动附加当前编辑笔记的信息。 | 针对笔记内容提问 | Obsidian `Workspace`, `Editor.getSelection()` | 低 | 1. 勾选“包含当前笔记”时，自动将笔记标题与文本组装入 Prompt；<br>2. 存在选中文本时，优先将选中片段作为上下文引用高亮展示。 |
 | **F-06: 会话基础管理** | 多轮对话与简单上下文保持。 | 深入探讨一个问题 | T3 `threadId` 映射机制 | 中 | 1. 单个会话内支持连续多轮追问；<br>2. 支持一键“新建会话（New Chat）”开启独立干净上下文；<br>3. 支持查看当前会话的 Thread ID。 |
 | **F-07: 采纳与复制** | 将 Agent 生产的知识快速回流到笔记。 | 整理笔记与采纳方案 | Clipboard API, `Editor.replaceRange()` | 低 | 1. 回答气泡底部提供“复制全文”按钮；<br>2. 提供“插入到当前文档光标处”按钮，内容无格式错乱写入。 |
@@ -106,7 +106,7 @@ Obsidian 作为以“本地优先（Local-First）”、“双向链接”和 Ma
 经过对参考项目的深入调研，我们对技术边界确立以下明确决策：
 
 ### 决策 1：不嵌入 WebView / Iframe
-- **结论**：**采用 Obsidian 原生 DOM + MarkdownRenderer 构建侧边栏 UI**。
+- **结论**：**采用 Obsidian 原生 DOM 与隔离的 Markdown 渲染构建侧边栏 UI**。
 - **原因**：Iframe 内嵌的 Web 界面无法继承 Obsidian 的主题样式与快捷键，且与当前编辑器的选区、光标双向联动极其困难。
 
 ### 决策 2：插件内不启动独立 T3 Server 进程

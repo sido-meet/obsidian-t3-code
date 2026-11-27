@@ -1,0 +1,23 @@
+import { fileURLToPath } from 'node:url';
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  resolve: {
+    alias: {
+      obsidian: fileURLToPath(new URL('./tests/__mocks__/obsidian.ts', import.meta.url)),
+    },
+  },
+  test: {
+    environment: 'node',
+    include: ['tests/**/*.test.ts'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/**'],
+      reporter: ['text', 'html'],
+      thresholds: {
+        'src/context.ts': { branches: 100, functions: 100, lines: 100, statements: 100 },
+        'src/t3/{rpc,transcript}.ts': { branches: 100, functions: 100, lines: 100, statements: 100 },
+      },
+    },
+  },
+});

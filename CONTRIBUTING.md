@@ -1,6 +1,6 @@
-# T3-Codian 贡献指南 (CONTRIBUTING)
+# Obsidian T3 Code 贡献指南 (CONTRIBUTING)
 
-感谢你关注并参与 **T3-Codian** 的建设。为了保证代码库的高可靠性、结构清晰与知识沉淀，所有人类开发者与 AI Agent 均须严格遵守本贡献指南。
+感谢你关注并参与 **Obsidian T3 Code** 的建设。为了保证代码库的高可靠性、结构清晰与知识沉淀，所有人类开发者与 AI Agent 均须严格遵守本贡献指南。
 
 ---
 

@@ -1,0 +1,64 @@
+.obsidian-t3-code {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-3);
+  height: 100%;
+}
+
+.obsidian-t3-code-header,
+.obsidian-t3-code-composer,
+.obsidian-t3-code-controls {
+  display: grid;
+  gap: var(--size-4-2);
+}
+
+.obsidian-t3-code-header [role="status"],
+.obsidian-t3-code-thread {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  overflow-wrap: anywhere;
+}
+
+.obsidian-t3-code-controls {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.obsidian-t3-code-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.obsidian-t3-code-message {
+  padding: var(--size-4-3) 0;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.obsidian-t3-code-message-body {
+  white-space: pre-wrap;
+}
+
+.obsidian-t3-code-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-2);
+  margin-top: var(--size-4-2);
+}
+
+.obsidian-t3-code-composer textarea {
+  min-height: 5rem;
+  width: 100%;
+  resize: vertical;
+}
+
+.obsidian-t3-code-markdown pre {
+  overflow-x: auto;
+  padding: var(--size-4-3);
+  background: var(--background-secondary);
+}
+
+.obsidian-t3-code-markdown .hljs-keyword { color: var(--code-keyword); }
+.obsidian-t3-code-markdown .hljs-string { color: var(--code-string); }
+.obsidian-t3-code-markdown .hljs-number { color: var(--code-value); }
+.obsidian-t3-code-markdown .hljs-comment { color: var(--code-comment); }

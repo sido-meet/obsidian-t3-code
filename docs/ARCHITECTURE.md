@@ -1,16 +1,16 @@
-# T3-Codian 系统架构设计说明书
+# Obsidian T3 Code 系统架构设计说明书
 
-> **系统名称**：T3-Codian  
+> **系统名称**：Obsidian T3 Code
 > **文档版本**：v1.0.0 (MVP 阶段定稿)  
 > **状态**：架构定稿 (Approved Architecture)  
 > **日期**：2026-11-18  
-> **责任人**：T3-Codian 技术负责人
+> **责任人**：Obsidian T3 Code 技术负责人
 
 ---
 
 ## 1. 架构定位与设计哲学
 
-T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式智能体编排引擎** 的专属桥梁。
+Obsidian T3 Code 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式智能体编排引擎** 的专属桥梁。
 
 ### 核心设计原则：
 1. **轻量客户端，后端重计算 (Lightweight Client, Heavy Server)**：
@@ -20,7 +20,7 @@ T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式�
    - 严格落实非接触式上下文提取（只读探测），禁止 Agent 在后台自动篡改 Markdown 笔记。
    - 所有回写操作必须经过用户显式触发（“插入当前光标处”），且完全进入 Obsidian 原生撤销栈（Ctrl+Z 可一键撤回）。
 3. **原生体验与极致性能 (Obsidian-Native & Zero Bloat)**：
-   - 采用 Obsidian 原生 DOM API + 内置 MarkdownRenderer 构建侧边栏面板，零第三方重型 UI 框架依赖，打包体积 `< 200KB`，样式 100% 自动适配用户当前主题。
+   - 采用 Obsidian 原生 DOM API 与隔离的 Markdown 渲染 构建侧边栏面板，零第三方重型 UI 框架依赖，打包体积 `< 200KB`，样式 100% 自动适配用户当前主题。
 4. **协议驱动与版本解耦 (Protocol-Driven)**：
    - 基于成熟的 **T3 Orchestrator V2 协议**（`T3_PROTOCOL_VERSION = 2`），实现请求、流式事件分发与错误恢复的标准化。
 
@@ -32,7 +32,7 @@ T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式�
 ┌────────────────────────────────────────────────────────────────────────┐
 │                        Obsidian 表现层 (Presentation Layer)            │
 │  ┌───────────────────────┐  ┌───────────────────┐  ┌────────────────┐  │
-│  │    T3CodianView       │  │  EditorContext    │  │ SettingTab     │  │
+│  │    ObsidianT3CodeView       │  │  EditorContext    │  │ SettingTab     │  │
 │  │  (Sidebar Chat Panel) │  │  Bridge (Active/  │  │ (Server URL &  │  │
 │  │  - Header & Status    │  │   Selection)      │  │  Connection)   │  │
 │  │  - Message Stream     │  │                   │  │                │  │
@@ -71,12 +71,12 @@ T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式�
 ## 3. 核心子系统架构设计
 
 ### 3.1 Obsidian 插件表现层 (`src/ui/`)
-1. **`T3CodianPlugin`**：
+1. **`ObsidianT3CodePlugin`**：
    - 继承自 Obsidian `Plugin` 基类，管理插件生命周期：
-     - `onload()`：初始化配置、注册命令、添加侧边栏图标、注册 `T3CodianView` 视图、启动后台连接健康探测。
+     - `onload()`：初始化配置、注册命令、添加侧边栏图标、注册 `ObsidianT3CodeView` 视图、启动后台连接健康探测。
      - `onunload()`：断开 WebSocket 连接，释放定时器，清理事件监听，保证**零进程与句柄残留**。
-2. **`T3CodianView`**：
-   - 继承自 `ItemView`（ViewType: `t3-codian-chat-view`），挂载在右侧边栏。
+2. **`ObsidianT3CodeView`**：
+   - 继承自 `ItemView`（ViewType: `obsidian-t3-code-chat-view`），挂载在右侧边栏。
    - 内部由三部分组成：
      - **Header**：展示 T3 Code 连接状态绿灯/红灯、当前模型指示器（Codex）、一键新建会话按钮；
      - **Message Container**：气泡式展示用户与 Agent 对话，集成思考过程展开/折叠、Markdown 代码高亮；
@@ -103,11 +103,8 @@ T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式�
 2. **协议端点契约**：
    - **握手探测**：`GET /.well-known/t3/environment`
      - 校验返回值中 `orchestrationProtocolVersion === 2`。
-   - **配对认证**：`POST /oauth/token`
-     - 若配置了配对码，使用 DPoP 签名完成令牌交换；若是本地无鉴权直连模式，直接使用初始会话令牌。
-   - **实时数据流**：`ws://127.0.0.1:3425/api/orchestration/v2`
-     - 基于 JSON-RPC 2.0，发送 `turn/start`，持续监听服务端下发的 `item/append`（文本增量）、`turn/completed`（轮次完成）。
-
+   - **配对认证**：向 `POST /oauth/token` 提交一次性配对码，仅请求 `orchestration:read` 与 `orchestration:operate`。凭据只保存在内存中。
+   - **实时数据流**：通过 `POST /api/auth/websocket-ticket` 取得一次性票据，建立 `/ws` 连接。使用 Effect RPC 的 `orchestration.dispatchCommand` 和 `orchestration.subscribeThread`，并通过 Ping/Pong 检测断线。
 ---
 
 ### 3.3 会话与运行控制层 (`src/session/`)
@@ -119,7 +116,7 @@ T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式�
    - 跟踪单次回答的生命周期：
      - 发送 Prompt 时创建临时的 Assistant 消息占位符；
      - 接收增量 Token 时，通过节流函数（`requestAnimationFrame`）更新 UI；
-     - 点击“停止”时，向服务端下发 `turn/interrupt`。
+     - 点击“停止”时，向服务端派发 `run.interrupt`。
 
 ---
 
@@ -137,9 +134,9 @@ T3-Codian 是连接 **Obsidian 本地双链知识库** 与 **T3 Code 分布式�
 | 核心问题 | 最终选型 | 理由与依据 |
 | :--- | :--- | :--- |
 | **编程语言** | TypeScript 5.x (`strict: true`) | 与 Obsidian API 深度契合，配合 `@effect/schema` 类型契约。 |
-| **UI 渲染框架** | 原生 DOM API + Obsidian MarkdownRenderer | 零 React 开销，打包体积极小（`<200KB`），无缝适配主题 CSS 变量。 |
+| **UI 渲染框架** | 原生 DOM API 与隔离的 Markdown 渲染 | 零 React 开销，打包体积极小（`<200KB`），无缝适配主题 CSS 变量。 |
 | **通信机制** | 原生 `fetch` + 原生 `WebSocket` | 纯 Web 标准，跨平台高度一致，无任何 Node 平台原生绑定。 |
-| **加密库** | `@noble/hashes` (轻量纯 JS) | 仅用于 DPoP 签名的 SHA-256，替代体积臃肿的 Node crypto。 |
+| **配对** | 本地回环服务的 OAuth token exchange | 仅使用一次性配对码和内存会话。 |
 | **构建体系** | `esbuild` | 毫秒级打包，构建产物仅为单个 `main.js`。 |
 | **测试套件** | `vitest` | 支持快速单元测试、模拟 WebSocket 服务端测试与 Obsidian 内存 Mock。 |
 
@@ -218,3 +215,9 @@ export interface ISessionService {
 | **`ProtocolMismatchError`**| 服务端协议版本不为 2 | 提示“请升级 T3 Code 桌面端到最新版本” | 停止握手尝试，阻断消息发送，避免脏数据写入。 |
 | **`TurnInterruptedError`** | 用户点击“停止生成”或关闭 Obsidian | 消息气泡标记“生成已取消”，保留已生成的片段 | 向服务端发送取消信号，安全关闭当前流监听。 |
 | **`VaultAccessError`** | 当前未打开任何笔记却尝试插入 | 弹窗提示“请先在编辑器中打开一篇笔记” | 拦截插入动作，保护剪贴板内容。 |
+
+## MVP 实施协议说明
+
+桌面插件以实际验证的 T3 Orchestrator v2 服务契约为准。客户端发现服务后，通过 `/oauth/token` 交换一次性配对码，仅申请编排读取和操作权限，再通过 `/api/auth/websocket-ticket` 取得一次性连接票据。实时通信使用 `/ws` 上的 Effect RPC，通过 `orchestration.dispatchCommand` 创建线程和派发消息，通过 `orchestration.subscribeThread` 应用快照和增量事件。文中的接口命名与时序图用于说明设计，具体请求与模块见 `src/t3/`。
+
+已完成的模型回复通过不调用 Vault 处理器的 Markdown 渲染器展示。代码围栏只用于显示和语法高亮，HTML 与图片嵌入保持静态。复制和显式插入仍使用原始 Markdown。

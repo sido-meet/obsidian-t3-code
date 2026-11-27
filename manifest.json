@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-t3-code",
+  "name": "Obsidian T3 Code",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "T3 Code Agent integration for Obsidian",
+  "author": "Obsidian T3 Code Team",
+  "authorUrl": "https://github.com/sido-meet/obsidian-t3-code",
+  "isDesktopOnly": true
+}

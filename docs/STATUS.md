@@ -1,61 +1,23 @@
-# T3-Codian 项目当前状态与里程碑进展 (STATUS)
+# Obsidian T3 Code 项目状态
 
-> **当前阶段**：阶段 0 — 工程与管理基础设施初始化（Phase 0: Engineering & Governance Init）  
-> **最后更新时间**：2026-11-18 12:38:00  
-> **维护责任人**：技术负责人 (AI Tech Lead)
+**2026-11-26** · MVP v0.1 已实现，剩余首字时延目标和远端 CI 验收。
 
----
+## 当前状态
 
-## 1. 当前阶段概况
+- GitHub 仓库与插件 ID 已更名为 `obsidian-t3-code`。仓库地址为 [sido-meet/obsidian-t3-code](https://github.com/sido-meet/obsidian-t3-code)，原有 Issue 随仓库迁移。本地 `origin` 已更新。
+- MVP 分支为 `feat/2-mvp-v0.1`，基于 Issue #1 脚手架分支。安装步骤见 [README](../README.md)，本次实施顺序见 [执行计划](superpowers/plans/2026-11-26-mvp-execution.md)，脚手架审查见 [Issue #1 审查记录](reviews/2026-11-18-issue-1-review.md)。
 
-当前项目处于**阶段 0：工程管理与软件基础设施初始化**阶段。  
-重点是确保开发环境健全、建立不可违背的 Agent 工程规则、明确 Git 分支治理模式与架构顶层设计，为后续实质编码筑牢地基。
+## 验证记录
 
----
+| 验收项 | 证据 |
+| --- | --- |
+| 安装与配置 | Windows 的独立 Obsidian 1.12.7 配置和临时 Vault 成功加载插件，命令重复打开仍为同一个侧栏。连接地址和笔记开关由 PluginData 保存。 |
+| 本地服务连接 | 隔离的 T3 Code `v0.1.12-nightly.20261121.5024` 中，服务发现、OAuth 配对、取得一次性票据和 WebSocket 握手成功。桌面侧栏从点击连接到可选项目实测 47 ms。 |
+| Codex 对话 | 桌面测试从首轮和同线程追问收到了真实回复。隔离服务验证了重连恢复同一线程，以及停止当前运行。模拟帧测试覆盖增量输出、断线重连、会话切换和停止。 |
+| 时延目标 | 桌面样本从点击发送到首条回复分别约为 15.5 秒和 19.8 秒，尚未达到 PRD 的 2 秒目标。 |
+| 选区与采纳 | 在临时 Vault 选中测试文字，Codex 返回了该选区原文。点击插入后，回复准确写入光标位置。 |
+| 工程门禁 | 47 个本地测试通过，协议帧解析、会话投影和笔记上下文模块的行、语句、函数及分支覆盖率均为 100%。构建体积约 157 KiB。 |
+| 独立审查 | 审查发现并修复了重复侧栏、半开连接、快照竞态、重连次数继承、历史消息反复渲染和 Vault Markdown 处理器触发问题。 |
+| GitHub Actions | 推送已获授权。Windows 与 Ubuntu 的 CI 结果以 [GitHub Actions](https://github.com/sido-meet/obsidian-t3-code/actions) 为准。 |
 
-## 2. 已完成事项 (Completed Items)
-
-- [x] **P0 环境深度核查**：
-  - 验证本地工具链：Node.js v22.23.1、npm 10.9.8、Git 2.48.1、GitHub CLI 2.97.0 全量就绪。
-  - 验证 GitHub 认证：账号 `sido-meet` 鉴权正常，具备 `repo` 读写及管理权限。
-  - 验证 T3 Code 原生能力：独立 Agent 会话派发、Git Worktree 支持、GitHub Issue/PR 操作完全可用。
-- [x] **Superpowers 全局技能挂载**：
-  - 在 Antigravity（T3 Code 核心驱动）完成 Superpowers 6.3.0 插件全量 14 项 Skills 的加载与启用。
-  - 在 Codex 运行时完成 `superpowers@openai-curated` 插件的安装与启用。
-- [x] **本地 Git 仓库初始化**：
-  - 目标目录 `E:\Projects\T3-Codian` 完成 Git 仓库初始化，默认主干分支为 `main`。
-  - 配置工程级 `.gitignore`（过滤 `node_modules`、构建产物、测试 Vault 及敏感凭证）。
-- [x] **远程 GitHub 仓库创建与首次推送**：
-  - 成功创建公开仓库：https://github.com/sido-meet/t3-codian
-  - 配置远程源 `origin`（`git@github.com:sido-meet/t3-codian.git`），完成 `main` 分支上游跟踪推送。
-- [x] **三大参考项目深度技术调研与方案对比**：
-  - 深度阅读并剖析 `YishenTu/claudian`、`pingdotgg/t3code`、`7bgsbm749g-boop/t3-obsidian` 三大源码库。
-  - 完成 4 份调研与对比决策报告：`docs/research/claudian.md`、`docs/research/t3code.md`、`docs/research/t3-obsidian.md`、`docs/research/architecture-comparison.md`。
-  - 确立以“方案 D（深度原生 UI + T3 V2 协议桥接）”为核心推荐的技术路径。
-- [x] **完整技术架构设计与测试策略定稿**：
-  - 发布系统架构设计规范：`docs/ARCHITECTURE.md`。
-  - 发布端到端四层测试金字塔规范：`docs/TESTING.md`。
-  - 发布集成架构决策记录：`docs/adr/0001-integration-architecture.md`。
-
----
-
-## 3. 正在开发的 Issue (Active Issues)
-
-- **当前无正在开发的业务 Issue**。
-- 即将正式规划并启动：
-  - **Issue #1**：Obsidian 基础插件脚手架与 TypeScript/esbuild 构建环境搭建。
-  - **Issue #2**：T3 Code ACP 通信协议客户端契约定义与 Mock 测试。
-
----
-
-## 4. 阻塞问题 (Blockers)
-
-- **当前无技术与外部阻塞项（No Blockers）**。
-
----
-
-## 5. 下一步任务 (Next Tasks)
-
-1. **规划并创建 GitHub Issue #1**：明确 Obsidian 插件脚手架与编译流水线的验收标准。
-2. **开辟首条特性分支**：基于 `main` 分支拉取 `feat/issue-1-plugin-scaffold`，进入 TDD 开发闭环。
-3. **工程脚手架配置**：编写 `package.json`、`tsconfig.json`、`manifest.json`，配置 `esbuild` 与 `vitest`。
+历史会话目录、桌面端双向会话恢复和侧栏内审批按现有 P0 范围留待后续。MVP 内 Codex 需要用户处理审批时会引导至 T3 Code。

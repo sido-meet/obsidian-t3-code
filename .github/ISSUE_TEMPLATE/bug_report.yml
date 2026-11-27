@@ -1,0 +1,70 @@
+name: Bug 报告
+description: 报告 Obsidian T3 Code 的缺陷，并附带可复现步骤与环境信息
+title: "[Bug] "
+labels: ["type:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请提供可复现的最小步骤，帮助我们定位问题。
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤
+      description: 列出触发该缺陷的操作序列。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 你认为应当发生什么。
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为
+      description: 实际发生了什么，包含错误信息。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 插件开发者控制台输出或 T3 Code 服务端日志。
+  - type: input
+    id: obsidian-version
+    attributes:
+      label: Obsidian 版本
+      placeholder: 1.8.10
+    validations:
+      required: true
+  - type: input
+    id: t3code-version
+    attributes:
+      label: T3 Code 版本
+      placeholder: 0.6.2
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: 插件版本
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: checkboxes
+    id: vault-safety
+    attributes:
+      label: Vault 安全
+      options:
+        - label: 复现步骤使用了测试库（test-vault），未对真实笔记造成破坏性写入。
+          required: false
+  - type: textarea
+    id: data-loss
+    attributes:
+      label: 是否涉及笔记数据丢失或被篡改？
+      description: 如涉及，请描述受影响的笔记与预期状态。
+    validations:
+      required: false
