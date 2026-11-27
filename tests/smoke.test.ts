@@ -21,20 +21,20 @@ const getRegisteredCommands = (plugin: ObsidianT3CodePlugin): RegisteredCommand[
   (plugin as unknown as { commands: RegisteredCommand[] }).commands;
 
 const manifest: PluginManifest = {
-  id: 'obsidian-t3-code',
-  name: 'Obsidian T3 Code',
+  id: 't3-codian',
+  name: 'T3-Codian',
   version: '0.1.0',
   minAppVersion: '1.5.0',
-  description: 'T3 Code Agent integration for Obsidian',
-  author: 'Obsidian T3 Code Team',
+  description: 'Chat with local T3 Code agents and reference your notes.',
+  author: 'T3-Codian Team',
   isDesktopOnly: true,
 };
 
-describe('Obsidian T3 Code plugin', () => {
+describe('T3-Codian plugin', () => {
   it('exports a plugin class that can be instantiated', () => {
     const plugin = new ObsidianT3CodePlugin(new App(), manifest);
 
-    expect(plugin.manifest.id).toBe('obsidian-t3-code');
+    expect(plugin.manifest.id).toBe('t3-codian');
   });
 
   it('completes onload without throwing', async () => {
@@ -46,8 +46,8 @@ describe('Obsidian T3 Code plugin', () => {
     ]));
     expect(plugin).toHaveProperty('commands', expect.arrayContaining([
       {
-        id: 'obsidian-t3-code-open-chat',
-        name: '打开 Obsidian T3 Code 聊天面板',
+        id: 'open-chat',
+        name: '打开 T3-Codian 聊天面板',
         callback: expect.any(Function),
       },
     ]));
@@ -61,7 +61,15 @@ describe('Obsidian T3 Code plugin', () => {
 
     expect(registeredView.type).toBe('obsidian-t3-code-chat-view');
     expect(registeredView.factory({}).getViewType()).toBe('obsidian-t3-code-chat-view');
-    expect(registeredView.factory({}).getDisplayText()).toBe('Obsidian T3 Code');
+    expect(registeredView.factory({}).getDisplayText()).toBe('T3-Codian');
+  });
+
+  it('preserves the host ItemView title element before the sidebar opens', async () => {
+    const plugin = new ObsidianT3CodePlugin(new App(), manifest);
+    await plugin.onload();
+
+    const [registeredView] = getRegisteredViews(plugin);
+    expect(registeredView.factory({})).toHaveProperty('titleEl.setText', expect.any(Function));
   });
 
   it('opens the chat view in the right sidebar when the command runs', async () => {
@@ -113,4 +121,17 @@ it('reveals the existing chat without creating another sidebar tab', async () =>
   await vi.waitFor(() => expect(plugin.app.workspace).toHaveProperty('revealedLeaves', [expect.any(Object), expect.any(Object)]));
   expect(plugin.app.workspace).toHaveProperty('activatedViewTypes', ['obsidian-t3-code-chat-view']);
   expect(plugin.app.workspace).toHaveProperty('revealedLeaves', [expect.any(Object), expect.any(Object)]);
+});
+
+it('reveals an existing chat when older Obsidian returns void', async () => {
+  const plugin = new ObsidianT3CodePlugin(new App(), manifest);
+  const workspace = plugin.app.workspace as unknown as { legacyRevealLeaf: boolean; revealedLeaves: unknown[] };
+  workspace.legacyRevealLeaf = true;
+  await plugin.onload();
+  const [command] = getRegisteredCommands(plugin);
+
+  command.callback();
+  await vi.waitFor(() => expect(workspace.revealedLeaves).toHaveLength(1));
+  expect(() => command.callback()).not.toThrow();
+  await vi.waitFor(() => expect(workspace.revealedLeaves).toHaveLength(2));
 });

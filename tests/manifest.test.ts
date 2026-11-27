@@ -13,11 +13,16 @@ describe('Obsidian plugin manifest', () => {
   });
 
   it('declares the required Obsidian manifest fields', () => {
-    expect(manifest.id).toBe('obsidian-t3-code');
+    expect(manifest.id).toBe('t3-codian');
     expect(manifest.id).toBe(packageJson.name);
-    expect(manifest.name).toBe('Obsidian T3 Code');
+    expect(manifest.name).toBe('T3-Codian');
     expect(manifest.minAppVersion).toBe('1.5.0');
     expect(manifest.isDesktopOnly).toBe(true);
+    expect(manifest.description).toMatch(/\.$/);
+
+    for (const field of ['id', 'name', 'description', 'author'] as const) {
+      expect(String(manifest[field])).not.toMatch(/obsidian/i);
+    }
 
     for (const field of ['name', 'version', 'description', 'author'] as const) {
       expect(manifest[field]).toBeTypeOf('string');

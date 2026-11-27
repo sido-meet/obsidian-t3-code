@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-t3-code",
+  "name": "t3-codian",
   "version": "0.1.0",
-  "description": "T3 Code Agent integration for Obsidian",
+  "description": "Chat with local T3 Code agents and reference your notes.",
   "main": "main.js",
   "private": true,
   "scripts": {

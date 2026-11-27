@@ -61,7 +61,7 @@ export class T3Connection {
         subject_token_type: 'urn:t3:params:oauth:token-type:environment-bootstrap',
         requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
         scope: 'orchestration:read orchestration:operate',
-        client_label: 'Obsidian T3 Code',
+        client_label: 'T3-Codian',
       }),
     });
     if (reply.token_type !== 'Bearer' || typeof reply.access_token !== 'string' || !reply.access_token) {

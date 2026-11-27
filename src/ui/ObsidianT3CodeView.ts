@@ -138,7 +138,7 @@ export default class ObsidianT3CodeView extends ItemView {
   constructor(leaf: WorkspaceLeaf, private readonly plugin: ObsidianT3CodePlugin) { super(leaf); }
 
   getViewType(): string { return VIEW_TYPE_OBSIDIAN_T3_CODE; }
-  getDisplayText(): string { return 'Obsidian T3 Code'; }
+  getDisplayText(): string { return 'T3-Codian'; }
 
   private get activeTab(): SidebarTab {
     return this.tabs.find(tab => tab.id === this.activeTabId) ?? this.tabs[0];

@@ -15,14 +15,16 @@ export class Workspace {
   readonly revealedLeaves: WorkspaceLeafStub[] = [];
   readonly leaves = new Map<string, WorkspaceLeafStub>();
   rightLeafAvailable = true;
+  legacyRevealLeaf = false;
 
   getLeavesOfType(type: string): WorkspaceLeafStub[] {
     const leaf = this.leaves.get(type);
     return leaf ? [leaf] : [];
   }
 
-  async revealLeaf(leaf: WorkspaceLeafStub): Promise<void> {
+  revealLeaf(leaf: WorkspaceLeafStub): Promise<void> | void {
     this.revealedLeaves.push(leaf);
+    if (!this.legacyRevealLeaf) return Promise.resolve();
   }
 
   getRightLeaf(_split: boolean): WorkspaceLeafStub | null {
@@ -39,6 +41,8 @@ export class App {
 }
 
 export class ItemView {
+  readonly titleEl = { setText(): void {} };
+
   constructor(public leaf: WorkspaceLeaf) {}
 }
 

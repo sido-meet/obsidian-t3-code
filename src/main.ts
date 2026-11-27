@@ -37,10 +37,10 @@ export default class ObsidianT3CodePlugin extends Plugin {
     this.settings = normalizeSettings(await this.loadData());
     this.addSettingTab(new SettingsTab(this.app, this));
     this.registerView(VIEW_TYPE_OBSIDIAN_T3_CODE, leaf => new ObsidianT3CodeView(leaf, this));
-    this.addRibbonIcon('message-square', 'Obsidian T3 Code', () => this.openChatView());
+    this.addRibbonIcon('message-square', 'T3-Codian', () => this.openChatView());
     this.addCommand({
-      id: 'obsidian-t3-code-open-chat',
-      name: '打开 Obsidian T3 Code 聊天面板',
+      id: 'open-chat',
+      name: '打开 T3-Codian 聊天面板',
       callback: () => this.openChatView(),
     });
   }
@@ -56,7 +56,8 @@ export default class ObsidianT3CodePlugin extends Plugin {
     if (!this.opening) {
       const existing = workspace.getLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE)[0];
       if (existing) {
-        void workspace.revealLeaf(existing).catch(() => new Notice('无法显示 Obsidian T3 Code 侧栏。'));
+        void Promise.resolve(workspace.revealLeaf(existing))
+          .catch(() => new Notice('无法显示 T3-Codian 侧栏。'));
         return;
       }
       const leaf = workspace.getRightLeaf(false);
@@ -66,6 +67,6 @@ export default class ObsidianT3CodePlugin extends Plugin {
     }
     void this.opening.then(leaf => {
       if (!this.unloaded) return workspace.revealLeaf(leaf);
-    }).catch(() => new Notice('无法显示 Obsidian T3 Code 侧栏。'));
+    }).catch(() => new Notice('无法显示 T3-Codian 侧栏。'));
   }
 }
