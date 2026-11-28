@@ -95,6 +95,7 @@ class FakeElement {
   title = '';
   value = '';
   selectionStart = 0;
+  selectionEnd = 0;
   placeholder = '';
   rows = 1;
   scrollHeight = 120;
@@ -363,6 +364,11 @@ class FakeElement {
 
   focus(): void {
     this.ownerDocument.activeElement = this;
+  }
+
+  setSelectionRange(start: number, end: number): void {
+    this.selectionStart = start;
+    this.selectionEnd = end;
   }
 
   blur(): void {
@@ -1290,5 +1296,196 @@ describe('ObsidianT3CodeView V2 UI', () => {
     expect(store.getSnapshot().activeThreadDetails.has('th-a')).toBe(false);
 
     await view.onClose();
+  });
+
+  it('subscribes & awaits sync before new-thread dispatch, keeps bodyEl & scrollTop across streaming completion, preserves filter focus, and isolates two leaves', async () => {
+    const store = new T3Store();
+    const order: string[] = [];
+    let activeListener: ((ev: BackendEvent) => void) | undefined;
+    const rpcCaps: BackendCapabilities = {
+      mode: 'rpc',
+      supportsLiveCatalog: true,
+      supportsProviderRefresh: true,
+      supportsStreaming: true,
+      supportsStop: true,
+      supportsMidThreadModelSwitch: true,
+      supportsRuntimeModeSwitch: true,
+      supportsInteractionModeSwitch: true,
+      supportsApprovals: true,
+      supportsContextUsage: true,
+      supportsQuotaUsage: true,
+    };
+    const providerOne: ProviderDescriptor[] = [{
+      instanceId: 'codex',
+      driver: 'codex',
+      displayName: 'Codex',
+      enabled: true,
+      installed: true,
+      status: 'ready',
+      reportsContextWindow: true,
+      supportedRuntimeModes: ['approval-required'],
+      showInteractionModeToggle: true,
+      quota: { status: 'unsupported', windows: [] },
+      models: [{ providerId: 'codex', slug: 'gpt-6-astra', name: 'GPT-6 Astra', extraOptions: [] }],
+    }];
+
+    const fakeRpc = {
+      mode: 'rpc',
+      connect: vi.fn(async () => rpcCaps),
+      disconnect: vi.fn(async () => undefined),
+      getProviders: vi.fn(async () => providerOne),
+      listThreads: vi.fn(async () => []),
+      openThread: vi.fn(async (tid: string, cb: (ev: BackendEvent) => void) => {
+        activeListener = cb;
+        order.push(`openThread:${tid}`);
+        const snap: ThreadDetail = {
+          thread: makeThread({ threadId: tid, status: 'idle', runtimeMode: 'approval-required' }),
+          messages: [],
+          turnItems: [],
+          runtimeRequests: [],
+          contextUsage: { status: 'unknown' },
+          runIds: [],
+          lastSequence: 1,
+          synchronized: false,
+        };
+        store.setThreadDetail(tid, snap);
+        cb({ type: 'thread.detail', detail: snap });
+        queueMicrotask(() => {
+          order.push(`synchronized:${tid}`);
+          const synced: ThreadDetail = { ...snap, synchronized: true, lastSequence: 2 };
+          store.setThreadDetail(tid, synced);
+          cb({ type: 'thread.detail', detail: synced });
+        });
+        return { unsubscribe: () => undefined };
+      }),
+      sendMessage: vi.fn(async input => {
+        order.push('thread.create:th-stream-new');
+        await input.onThreadReady?.('th-stream-new');
+        order.push('message.dispatch:th-stream-new');
+        return { threadId: 'th-stream-new', sequence: 3 };
+      }),
+      getPendingThreadIdForCommand: vi.fn(() => undefined),
+    } as unknown as RpcBackend;
+
+    const { view, root, doc } = setupView(
+      { projectPath: vaultDir, backendPreference: 'auto' },
+      p => new T3BackendManager({ getSettings: () => p.settings, store, rpcBackend: fakeRpc }),
+    );
+    await view.onOpen();
+    await waitReady(view);
+
+    // Filter focus & caret survive provider catalog updates from store
+    root.querySelector('.t3c-model-chip')!.click();
+    const filterInput = root.querySelector('.t3c-mp-filter')!;
+    filterInput.focus();
+    filterInput.value = 'astra';
+    filterInput.setSelectionRange(2, 5);
+    filterInput.dispatchEvent(new FakeEvent('input'));
+    store.setProviders([{ ...providerOne[0]! }]);
+    const rebuiltFilter = root.querySelector('.t3c-mp-filter')!;
+    expect(doc.activeElement).toBe(rebuiltFilter);
+    expect(rebuiltFilter.selectionStart).toBe(2);
+    expect(rebuiltFilter.selectionEnd).toBe(5);
+    doc.dispatchEvent(new FakeEvent('keydown', { key: 'Escape' }));
+
+    // New-thread send awaits onThreadReady -> openThread -> synchronized BEFORE message.dispatch
+    const draft = root.querySelector('.t3c-textarea')!;
+    draft.value = 'Stream before dispatch';
+    draft.dispatchEvent(new FakeEvent('input'));
+    root.querySelector('.t3c-send-btn')!.click();
+    await waitUntil(() => order.includes('message.dispatch:th-stream-new'));
+    expect(order).toEqual([
+      'thread.create:th-stream-new',
+      'openThread:th-stream-new',
+      'synchronized:th-stream-new',
+      'message.dispatch:th-stream-new',
+    ]);
+
+    // Streaming delta builds markdown row; scrolled-up position stays anchored; completion keeps same bodyEl & adds actions
+    const msgsEl = root.querySelector('.t3c-messages')!;
+    msgsEl.scrollHeight = 800;
+    msgsEl.clientHeight = 200;
+    msgsEl.scrollTop = 100; // Scrolled up (800 - 100 - 200 = 500 >= 60)
+
+    const deltaDetail: ThreadDetail = {
+      thread: makeThread({ threadId: 'th-stream-new', status: 'running', runtimeMode: 'approval-required' }),
+      messages: [
+        { id: 'u1', role: 'user', text: 'Stream before dispatch', streaming: false },
+        { id: 'a1', role: 'assistant', text: 'First chunk...', streaming: true },
+      ],
+      turnItems: [],
+      runtimeRequests: [],
+      contextUsage: { status: 'unknown' },
+      activeRunId: 'run-1',
+      runIds: ['run-1'],
+      lastSequence: 4,
+      synchronized: true,
+    };
+    store.setThreadDetail('th-stream-new', deltaDetail);
+    activeListener?.({ type: 'thread.detail', detail: deltaDetail });
+    await flush();
+
+    const bodyBeforeDone = root.querySelectorAll('.t3c-msg')[1]!.querySelector('.t3c-markdown')!;
+    expect(bodyBeforeDone).not.toBeNull();
+    expect(msgsEl.scrollTop).toBe(100);
+
+    const doneDetail: ThreadDetail = {
+      ...deltaDetail,
+      thread: makeThread({ threadId: 'th-stream-new', status: 'completed', runtimeMode: 'approval-required' }),
+      messages: [
+        { id: 'u1', role: 'user', text: 'Stream before dispatch', streaming: false },
+        { id: 'a1', role: 'assistant', text: 'First chunk... final text.', streaming: false },
+      ],
+      activeRunId: undefined,
+      lastSequence: 5,
+    };
+    store.setThreadDetail('th-stream-new', doneDetail);
+    activeListener?.({ type: 'thread.detail', detail: doneDetail });
+    await flush();
+
+    const bodyAfterDone = root.querySelectorAll('.t3c-msg')[1]!.querySelector('.t3c-markdown')!;
+    expect(bodyAfterDone).toBe(bodyBeforeDone);
+    expect(root.querySelectorAll('.t3c-msg')[1]!.querySelector('.t3c-msg-actions')).not.toBeNull();
+    expect(msgsEl.scrollTop).toBe(100);
+
+    // M5: uncertain dispatch banner is scoped only to originating tab and clears pendingDispatches when closed
+    const mgrInternal = (view as unknown as {
+      tabs: Array<{ id: string; uncertainCommandId?: string }>;
+      activeTab: { id: string; uncertainCommandId?: string };
+      activateTab: (id: string) => void;
+      closeTab: (id: string) => void;
+    });
+    const addTabBtn = root.querySelector('[aria-label="新开标签页"]')!;
+    addTabBtn.click();
+    await flush();
+    expect(mgrInternal.tabs).toHaveLength(2);
+    const tab1 = mgrInternal.tabs[0]!;
+    const tab2 = mgrInternal.tabs[1]!;
+    tab1.uncertainCommandId = 'cmd-uncertain-tab1';
+    store.upsertPendingDispatch({
+      commandId: 'cmd-uncertain-tab1',
+      messageId: 'msg-uncertain-tab1',
+      threadId: 'th-stream-new',
+      createdNewThread: false,
+      projectId: 'proj-1',
+      text: 'retry me',
+      status: 'uncertain',
+      createdAt: 1,
+    });
+    await flush();
+    // Tab 2 is active and has no uncertain dispatch -> banner must stay hidden
+    expect(mgrInternal.activeTab.id).toBe(tab2.id);
+    expect(root.querySelector('.t3c-banner')!.hidden).toBe(true);
+    // Closing Tab 1 cleans pendingDispatches from store
+    mgrInternal.closeTab(tab1.id);
+    await flush();
+    expect(store.getSnapshot().pendingDispatches.has('cmd-uncertain-tab1')).toBe(false);
+
+    // Open a second isolated view instance sharing same plugin -> closing both disposes both cleanly
+    const second = setupView({ projectPath: vaultDir, backendPreference: 'cli' });
+    cliMocks.listThreads.mockResolvedValue([]);
+    await second.view.onOpen();
+    await waitReady(second.view);
+    await Promise.all([view.onClose(), second.view.onClose()]);
   });
 });

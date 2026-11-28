@@ -88,4 +88,100 @@ describe('CliBackend', () => {
       vi.useRealTimers();
     }
   });
+
+  it('falls back to workspacePath when projectId is empty and kicks dormant openThread pollers on Turn 2 sendMessage', async () => {
+    const startProjects: string[] = [];
+    let turn = 1;
+    let showPhase = 0;
+    const runner = vi.fn(async (args: string[]) => {
+      if (args[1] === 'list') return [];
+      if (args[1] === 'start') {
+        startProjects.push(args[args.length - 2]!);
+        return { threadId: 'th-turn', runId: 'run-1' };
+      }
+      if (args[1] === 'send') {
+        turn = 2;
+        showPhase = 0;
+        return { threadId: 'th-turn', runId: 'run-2' };
+      }
+      if (args[1] === 'show') {
+        showPhase++;
+        return {
+          thread: { threadId: 'th-turn', title: 'Multi Turn', status: 'completed' },
+          messages: turn === 1
+            ? [{ role: 'user', text: 'p1' }, { role: 'assistant', text: 'a1' }]
+            : [{ role: 'user', text: 'p1' }, { role: 'assistant', text: 'a1' }, { role: 'user', text: 'p2' }, { role: 'assistant', text: 'a2' }],
+        };
+      }
+      return [];
+    });
+
+    const backend = new CliBackend({
+      pollIntervalMs: 500,
+      getSettings: () => ({ cliPath: 't3', provider: 'codex', model: 'gpt-6.2-sol', modelPresets: '' }),
+      createRunner: () => runner,
+    });
+    await backend.connect('E:\\FallbackWorkspace', '');
+
+    const t1 = await backend.sendMessage({ projectId: '', commandId: 'c1', messageId: 'm1', text: 'p1' });
+    expect(t1.threadId).toBe('th-turn');
+    expect(startProjects[0]).toBe('E:\\FallbackWorkspace');
+
+    const details: Array<{ msgCount: number }> = [];
+    const sub = await backend.openThread('th-turn', ev => {
+      if (ev.type === 'thread.detail') details.push({ msgCount: ev.detail.messages.length });
+    });
+    expect(details).toEqual([{ msgCount: 2 }]);
+
+    // Turn 2 on the same thread immediately wakes existing dormant poller even though status was 'completed'
+    await backend.sendMessage({ projectId: '', threadId: 'th-turn', commandId: 'c2', messageId: 'm2', text: 'p2' });
+    await vi.waitFor(() => expect(details.at(-1)?.msgCount).toBe(4));
+    expect(showPhase).toBeGreaterThanOrEqual(1);
+
+    // M2/H3 checks: disconnect aborts all openThread pollers, grace polling catches delayed Turn 2 transition, and verifyWorkspaceProjectBinding catches mismatched projectId
+    vi.useFakeTimers();
+    try {
+      let readCount = 0;
+      const graceBackend = new CliBackend({
+        pollIntervalMs: 400,
+        getSettings: () => ({ cliPath: 't3', provider: 'codex', model: 'gpt-6.2-sol', modelPresets: '' }),
+        createRunner: () => async (args: string[]) => {
+          if (args[1] === 'send') return { threadId: 'th-g', runId: 'run-g2' };
+          if (args[1] === 'show') {
+            readCount++;
+            if (readCount <= 2) {
+              return { thread: { threadId: 'th-g', title: 'Grace', status: 'completed' }, messages: [{ role: 'user', text: '1' }, { role: 'assistant', text: 'a1' }] };
+            }
+            return { thread: { threadId: 'th-g', title: 'Grace', status: 'completed', latestRunId: 'run-g2' }, messages: [{ role: 'user', text: '1' }, { role: 'assistant', text: 'a1' }, { role: 'user', text: '2' }, { role: 'assistant', text: 'a2' }] };
+          }
+          return [];
+        },
+      });
+      const counts: number[] = [];
+      await graceBackend.openThread('th-g', ev => {
+        if (ev.type === 'thread.detail') counts.push(ev.detail.messages.length);
+      });
+      expect(counts).toEqual([2]);
+      await graceBackend.sendMessage({ projectId: 'p', threadId: 'th-g', commandId: 'c3', messageId: 'm3', text: '2' });
+      await vi.advanceTimersByTimeAsync(450);
+      expect(counts.at(-1)).toBe(4);
+      await graceBackend.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await backend.disconnect();
+    sub.unsubscribe();
+
+    const mismatchBackend = new CliBackend({
+      getSettings: () => ({ cliPath: 't3', provider: 'codex', model: 'gpt-6.2-sol', modelPresets: '' }),
+      createRunner: () => async (args: string[]) => {
+        if (args[1] === 'list') return [{ threadId: 't-x', title: 'X', status: 'idle', projectId: 'other-proj' }];
+        return {};
+      },
+    });
+    await mismatchBackend.connect('E:\\OutsideWorkspace', 'vault-proj-id');
+    await expect(mismatchBackend.verifyWorkspaceProjectBinding('vault-proj-id')).rejects.toThrow('其他项目');
+    await mismatchBackend.disconnect();
+  });
 });

@@ -5,11 +5,13 @@ export function record(value: unknown): WireObject {
     ? value as WireObject : {};
 }
 
-function redactRpcErrorText(text: string): string {
+/** Redacts bearer tokens, DPoP tokens, WS tickets, and auth URL/JSON parameters from errors and diagnostics. */
+export function redactSensitiveText(text: string): string {
   return text
-    .replace(/\b(Bearer|DPoP)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
-    .replace(/([?&](?:wsTicket|token|access_token|subject_token|code)=)[^&\s#]+/gi, '$1[REDACTED]')
-    .replace(/("(?:token|access_token|subject_token|ticket|secret)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2');
+    .replace(/\b(Bearer|DPoP)\s+[^\s"'`<>?&]+/gi, '$1 [REDACTED]')
+    .replace(/([?&]|\b)((?:wsTicket|ticket|token|access_token|subject_token|refresh_token|pairingCode|code|secret)=)[^&\s#"']+/gi, '$1$2[REDACTED]')
+    .replace(/("(?:token|access_token|subject_token|wsTicket|ticket|secret|pairingCode|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+    .replace(/(\\"(?:token|access_token|subject_token|wsTicket|ticket|secret|pairingCode|refresh_token)\\"\s*:\s*\\")[^"\\]+(\\")/gi, '$1[REDACTED]$2');
 }
 
 function extractFailureMessage(exit: WireObject): string {
@@ -21,7 +23,7 @@ function extractFailureMessage(exit: WireObject): string {
     const node = record(item);
     const err = record(node.error);
     const raw = node._tag === 'Fail' ? (err.detail ?? err.message) : undefined;
-    if (typeof raw === 'string' && raw) return redactRpcErrorText(raw);
+    if (typeof raw === 'string' && raw) return redactSensitiveText(raw);
   }
   return 'T3 拒绝了请求。请检查项目、Codex 配置和配对权限。';
 }

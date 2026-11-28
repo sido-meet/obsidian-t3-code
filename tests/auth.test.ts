@@ -19,14 +19,22 @@ const VALID_CMD = [
 ].join('\n');
 
 describe('auth', () => {
-  it('redacts Bearer, DPoP, URL auth query params, and JSON credential keys', () => {
-    const sample = 'Authorization: Bearer top.sec-1 | DPoP dpop_2 | ws://127.0.0.1/ws?wsTicket=tk1&code=cd2 {"token":"secretVal"}';
+  it('redacts Bearer, DPoP, URL auth query params, bare key=value pairs, and escaped/unescaped JSON credential keys', () => {
+    const sample = 'Authorization: Bearer top.sec-1:abc% | DPoP dpop_2 | ws://127.0.0.1/ws?wsTicket=tk1&ticket=tk9&secret=sec1&refresh_token=rt1&code=cd2 | wsTicket=tkBare code=cdBare secret=bareS {"token":"secretVal","wsTicket":"wsJson"} \\"token\\":\\"escVal\\"';
     const redacted = redactSensitiveText(sample);
-    expect(redacted).not.toContain('top.sec-1');
+    expect(redacted).not.toContain('top.sec-1:abc%');
     expect(redacted).not.toContain('dpop_2');
     expect(redacted).not.toContain('tk1');
+    expect(redacted).not.toContain('tk9');
+    expect(redacted).not.toContain('sec1');
+    expect(redacted).not.toContain('rt1');
     expect(redacted).not.toContain('cd2');
+    expect(redacted).not.toContain('tkBare');
+    expect(redacted).not.toContain('cdBare');
+    expect(redacted).not.toContain('bareS');
     expect(redacted).not.toContain('secretVal');
+    expect(redacted).not.toContain('wsJson');
+    expect(redacted).not.toContain('escVal');
     expect(redacted).toContain('[REDACTED]');
   });
 

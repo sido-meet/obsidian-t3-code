@@ -158,6 +158,7 @@ export interface SendMessageInput {
   runtimeMode?: string;
   interactionMode?: 'default' | 'plan';
   expectedRunId?: string;
+  onThreadReady?: (threadId: string) => Promise<void> | void;
 }
 
 export interface ApprovalResponseInput {

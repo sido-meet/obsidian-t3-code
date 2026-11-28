@@ -49,3 +49,25 @@ it('groups configured presets without inventing model support', () => {
     { provider: 'claude-work', model: 'sonnet', option: 'effort=high' },
   ]);
 });
+
+it('preserves all legacy V1/pre-RPC data.json fields losslessly when migrating settings', () => {
+  const legacyData = {
+    cliPath: 'C:\\Users\\Administrator\\.t3\\bin\\t3.cmd',
+    projectPath: '',
+    provider: 'codex',
+    model: 'minimax-cn/MiniMax-M3.1-Flash',
+    includeNote: true,
+    projectId: 'fc56c689-08d7-4d91-b13d-a58d330f3625',
+  };
+  expect(normalizeSettings(legacyData)).toEqual({
+    cliPath: 'C:\\Users\\Administrator\\.t3\\bin\\t3.cmd',
+    projectPath: '',
+    projectId: 'fc56c689-08d7-4d91-b13d-a58d330f3625',
+    provider: 'codex',
+    model: 'minimax-cn/MiniMax-M3.1-Flash',
+    modelPresets: '',
+    includeNote: true,
+    serverUrl: '',
+    backendPreference: 'auto',
+  });
+});

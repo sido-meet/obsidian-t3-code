@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { T3AuthManager } from '../src/t3/auth';
 import { CLI_BACKEND_CAPABILITIES, type BackendCapabilities } from '../src/t3/backend';
-import { T3BackendManager, type BackendManagerSettings } from '../src/t3/backend-manager';
+import { T3BackendManager, VaultSecurityError, type BackendManagerSettings } from '../src/t3/backend-manager';
 import { CliBackend } from '../src/t3/cli-backend';
 import { RpcBackend, UncertainWriteError } from '../src/t3/rpc-backend';
 import { T3Store } from '../src/t3/store';
@@ -75,9 +75,10 @@ describe('T3BackendManager', () => {
     expect(store.getSnapshot().connectionPhase).toBe('connected-rpc');
     expect(store.getSnapshot().threads[0].threadId).toBe('t-rpc');
 
-    // Fall back to CLI when RPC fails, redacting tokens in the error banner
+    // Fall back to CLI when RPC fails: must explicitly disconnect leaked RPC state first, redacting tokens in banner
     rpcShouldFail = true;
     await mgr.retryRpc();
+    expect(rpcBackend.disconnect).toHaveBeenCalled();
     expect(mgr.activeMode).toBe('cli');
     expect(store.getSnapshot().connectionPhase).toBe('fallback-cli');
     expect(store.getSnapshot().connectionError).toContain('Bearer [REDACTED]');
@@ -272,11 +273,16 @@ describe('T3BackendManager', () => {
     });
     mgrHolder.mgr = mgrRef;
 
-    // Mismatched projectPath outside Vault + projectId pointing inside Vault falls back fail-closed instead of bypassing Vault
-    await mgrRef.connect('E:\\RealVault', 'E:\\Outside', 'proj-vault-id');
+    // Mismatched projectPath outside Vault + projectId pointing inside Vault MUST fail closed without falling back to CLI or clearing resolvedServerRoot
+    await expect(mgrRef.connect('E:\\RealVault', 'E:\\Outside', 'proj-vault-id')).rejects.toBeInstanceOf(VaultSecurityError);
     expect(rpcBackend.disconnect).toHaveBeenCalled();
-    expect(mgrRef.activeMode).toBe('cli');
+    expect(cliBackend.connect).not.toHaveBeenCalled();
+    expect(store.getSnapshot().connectionPhase).toBe('disconnected');
     expect(store.getSnapshot().connectionError).toContain('不一致');
+    expect(await mgrRef.isVaultOverlapping()).toBe(true);
+    await expect(mgrRef.sendMessage({ projectId: 'proj-vault-id', threadId: 'th-full', text: 'post-mismatch blocked' }))
+      .rejects.toThrow('approval-required');
+    idSeq = 0;
 
     // Valid Vault connection: existing full-access thread CANNOT be shadowed by passing runtimeMode: 'approval-required'
     (rpcBackend.getResolvedProjectWorkspaceRoot as ReturnType<typeof vi.fn>).mockReturnValue('E:\\RealVault');

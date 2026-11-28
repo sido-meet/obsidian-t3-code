@@ -36,6 +36,8 @@ export class CliBackend implements T3Backend {
   readonly mode = 'cli' as const;
   private controller?: AbortController;
   private workspacePath = '';
+  private readonly activePollers = new Map<string, Set<(expectedRunId?: string) => void>>();
+  private readonly pollerCancels = new Set<() => void>();
 
   constructor(private readonly options: CliBackendOptions) {}
 
@@ -47,7 +49,7 @@ export class CliBackend implements T3Backend {
 
   async connect(projectWorkspacePath: string, _projectId: string): Promise<BackendCapabilities> {
     this.workspacePath = projectWorkspacePath;
-    this.controller?.abort();
+    await this.disconnect();
     this.controller = new AbortController();
     const chat = this.newChat(this.controller.signal);
     await chat.check(projectWorkspacePath);
@@ -55,8 +57,13 @@ export class CliBackend implements T3Backend {
   }
 
   async disconnect(): Promise<void> {
+    for (const cancel of [...this.pollerCancels]) {
+      cancel();
+    }
+    this.pollerCancels.clear();
     this.controller?.abort();
     this.controller = undefined;
+    this.activePollers.clear();
   }
 
   async getProviders(): Promise<ProviderDescriptor[]> {
@@ -124,6 +131,18 @@ export class CliBackend implements T3Backend {
     return chat.list(projectId || this.workspacePath);
   }
 
+  /** Verifies that `workspacePath` does not resolve to a different T3 project than `expectedProjectId`. */
+  async verifyWorkspaceProjectBinding(expectedProjectId: string): Promise<void> {
+    const expected = expectedProjectId.trim();
+    const workspace = this.workspacePath.trim();
+    if (!expected || !workspace) return;
+    const chat = this.newChat(this.controller?.signal);
+    const workspaceThreads = await chat.list(workspace);
+    if (workspaceThreads.some(thread => thread.projectId && thread.projectId !== expected)) {
+      throw new Error('当前目录解析到了其他项目。请核对已登记的项目根目录和项目 ID。');
+    }
+  }
+
   async openThread(threadId: string, onEvent: (event: BackendEvent) => void): Promise<{ unsubscribe: () => void }> {
     const ac = new AbortController();
     const chat = this.newChat(ac.signal);
@@ -131,12 +150,32 @@ export class CliBackend implements T3Backend {
     const intervalMs = this.options.pollIntervalMs ?? 1600;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let closed = false;
+    let polling = false;
+    let kickQueued = false;
+    let lastMsgCount = -1;
+    let expectedRunId: string | undefined;
+    let gracePollsLeft = 0;
 
     const poll = async (): Promise<void> => {
       if (closed || ac.signal.aborted) return;
+      if (polling) {
+        kickQueued = true;
+        return;
+      }
+      polling = true;
       try {
         const snapshot = await chat.read();
         if (closed || ac.signal.aborted || !snapshot) return;
+        const grew = lastMsgCount >= 0 && snapshot.messages.length > lastMsgCount;
+        lastMsgCount = snapshot.messages.length;
+        const matchedExpectedRun = Boolean(
+          expectedRunId
+          && (snapshot.latestRunId === expectedRunId || snapshot.runIds.includes(expectedRunId)),
+        );
+        if (matchedExpectedRun || grew) {
+          gracePollsLeft = 0;
+          if (!ACTIVE_CLI_STATUSES.has(snapshot.status)) expectedRunId = undefined;
+        }
         onEvent({
           type: 'thread.detail',
           detail: {
@@ -151,30 +190,77 @@ export class CliBackend implements T3Backend {
             synchronized: true,
           },
         });
-        if (ACTIVE_CLI_STATUSES.has(snapshot.status) && !closed) {
+        if (closed || ac.signal.aborted) return;
+        if (ACTIVE_CLI_STATUSES.has(snapshot.status)) {
+          gracePollsLeft = 0;
           timer = setTimeout(() => void poll(), intervalMs);
+        } else if (gracePollsLeft > 0) {
+          gracePollsLeft--;
+          timer = setTimeout(() => void poll(), Math.min(intervalMs, 500));
         }
       } catch (error) {
         if (closed || ac.signal.aborted) return;
         onEvent({ type: 'error', message: error instanceof Error ? error.message : '无法读取会话。' });
+      } finally {
+        polling = false;
+        if (kickQueued && !closed && !ac.signal.aborted) {
+          kickQueued = false;
+          clearTimeout(timer);
+          timer = undefined;
+          void poll();
+        }
       }
     };
 
-    await poll();
-    return {
-      unsubscribe: () => {
-        closed = true;
-        clearTimeout(timer);
-        ac.abort();
-      },
+    const kick = (nextRunId?: string) => {
+      if (closed || ac.signal.aborted) return;
+      if (nextRunId) {
+        expectedRunId = nextRunId;
+        gracePollsLeft = 3;
+      }
+      if (polling) {
+        kickQueued = true;
+        return;
+      }
+      clearTimeout(timer);
+      timer = undefined;
+      void poll();
     };
+    const cleanup = () => {
+      closed = true;
+      clearTimeout(timer);
+      timer = undefined;
+      ac.abort();
+      this.pollerCancels.delete(cleanup);
+      const registered = this.activePollers.get(threadId);
+      if (registered) {
+        registered.delete(kick);
+        if (registered.size === 0) this.activePollers.delete(threadId);
+      }
+    };
+
+    this.pollerCancels.add(cleanup);
+    let pollSet = this.activePollers.get(threadId);
+    if (!pollSet) {
+      pollSet = new Set();
+      this.activePollers.set(threadId, pollSet);
+    }
+    pollSet.add(kick);
+
+    await poll();
+    return { unsubscribe: cleanup };
   }
 
   async sendMessage(input: SendMessageInput): Promise<{ threadId: string; runId?: string }> {
+    const project = input.projectId.trim() || this.workspacePath;
     const chat = this.newChat(this.controller?.signal, toCliSelection(input.modelSelection));
     chat.threadId = input.threadId;
-    const runId = await chat.send(input.projectId, input.text);
+    const runId = await chat.send(project, input.text);
     if (!chat.threadId) throw new Error('T3 CLI 未返回会话 ID。');
+    const pollers = this.activePollers.get(chat.threadId);
+    if (pollers) {
+      for (const kick of [...pollers]) kick(runId);
+    }
     return { threadId: chat.threadId, ...(runId ? { runId } : {}) };
   }
 

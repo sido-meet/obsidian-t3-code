@@ -337,6 +337,55 @@ function parseV2Message(raw: unknown): Message | undefined {
   };
 }
 
+const ACTIVE_RUN_STATUSES = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
+const ACTIVE_ITEM_STATUSES = new Set(['running', 'in_progress', 'streaming', 'pending', 'starting', 'preparing']);
+const TERMINAL_ITEM_STATUSES = new Set(['completed', 'done', 'interrupted', 'failed', 'cancelled']);
+
+function parseAssistantTurnItemMessage(
+  raw: unknown,
+  runStatuses?: ReadonlyMap<string, string>,
+  hasAnyActiveRun?: boolean,
+): Message | undefined {
+  const item = record(raw);
+  if (item.type !== 'assistant_message') return undefined;
+  if (item.textOmitted === true) return undefined;
+  const id = str(item.messageId) ?? str(item.id);
+  if (!id || typeof item.text !== 'string') return undefined;
+
+  let streaming: boolean;
+  if (typeof item.streaming === 'boolean') {
+    streaming = item.streaming;
+  } else {
+    const itemStatus = str(item.status)?.toLowerCase();
+    const runId = str(item.runId);
+    const runStatus = runId ? runStatuses?.get(runId) : undefined;
+    if (itemStatus && TERMINAL_ITEM_STATUSES.has(itemStatus)) {
+      streaming = false;
+    } else if (itemStatus && ACTIVE_ITEM_STATUSES.has(itemStatus)) {
+      streaming = true;
+    } else if (runStatus !== undefined) {
+      streaming = ACTIVE_RUN_STATUSES.has(runStatus);
+    } else {
+      streaming = hasAnyActiveRun ?? true;
+    }
+  }
+
+  return {
+    id,
+    role: 'assistant',
+    text: item.text,
+    streaming,
+  };
+}
+
+function mergeAssistantTurnItemMessage(messages: readonly Message[], streamMsg: Message): Message[] {
+  const existing = messages.find(m => m.id === streamMsg.id);
+  if (existing && !existing.streaming) {
+    return [...messages];
+  }
+  return upsertById(messages, streamMsg);
+}
+
 function parseTurnItem(raw: unknown): TurnItemSummary | undefined {
   const item = record(raw);
   const id = str(item.id);
@@ -388,11 +437,36 @@ export function parseThreadSnapshot(raw: unknown, fallbackThreadId?: string): {
     title: '未命名会话',
     status: 'idle',
   };
-  const messages = (Array.isArray(rawProjection.messages) ? rawProjection.messages : []).flatMap(m => {
+  let messages = (Array.isArray(rawProjection.messages) ? rawProjection.messages : []).flatMap(m => {
     const parsed = parseV2Message(m);
     return parsed ? [parsed] : [];
   });
-  const turnItems = (Array.isArray(rawProjection.turnItems) ? rawProjection.turnItems : []).flatMap(item => {
+  const runs = Array.isArray(rawProjection.runs) ? rawProjection.runs : [];
+  const runStatuses = new Map<string, string>();
+  const runIds = runs.flatMap(r => {
+    const rr = record(r);
+    const id = str(rr.id);
+    const status = str(rr.status);
+    if (id && status) runStatuses.set(id, status);
+    return id ? [id] : [];
+  });
+  const fallbackActiveRun = runs.find(r => {
+    const rr = record(r);
+    return typeof rr.id === 'string' && typeof rr.status === 'string' && ACTIVE_RUN_STATUSES.has(rr.status);
+  });
+  const activeRunId = str(record(rawProjection.thread).activeRunId) ?? str(record(fallbackActiveRun).id);
+  const snapshotHasActiveRun = Boolean(activeRunId || ACTIVE_RUN_STATUSES.has(thread.status));
+
+  const rawTurnItems = Array.isArray(rawProjection.turnItems) ? rawProjection.turnItems : [];
+  for (const rawTi of rawTurnItems) {
+    const streamMsg = parseAssistantTurnItemMessage(rawTi, runStatuses, snapshotHasActiveRun);
+    if (!streamMsg) continue;
+    const existing = messages.find(m => m.id === streamMsg.id);
+    if (!existing || (existing.streaming && streamMsg.text.length > existing.text.length)) {
+      messages = upsertById(messages, streamMsg);
+    }
+  }
+  const turnItems = rawTurnItems.flatMap(item => {
     const parsed = parseTurnItem(item);
     return parsed ? [parsed] : [];
   });
@@ -400,19 +474,8 @@ export function parseThreadSnapshot(raw: unknown, fallbackThreadId?: string): {
     const parsed = parseRuntimeRequest(req, thread.threadId);
     return parsed ? [parsed] : [];
   });
-  const runs = Array.isArray(rawProjection.runs) ? rawProjection.runs : [];
-  const runIds = runs.flatMap(r => {
-    const id = str(record(r).id);
-    return id ? [id] : [];
-  });
   const pendingCount = runtimeRequests.filter(r => r.status === 'pending').length;
   const hydratedThread: CliThread = pendingCount > 0 ? { ...thread, pendingRequestCount: pendingCount } : thread;
-  const activeStatuses = new Set(['preparing', 'queued', 'starting', 'running', 'waiting']);
-  const fallbackActiveRun = runs.find(r => {
-    const rr = record(r);
-    return typeof rr.id === 'string' && typeof rr.status === 'string' && activeStatuses.has(rr.status);
-  });
-  const activeRunId = str(record(rawProjection.thread).activeRunId) ?? str(record(fallbackActiveRun).id);
   const latestRunId = str(record(rawProjection.thread).latestRunId) ?? runIds[runIds.length - 1];
 
   return {
@@ -521,7 +584,38 @@ export function reduceThreadStreamItem(
     if (msg) nextDetail = { ...nextDetail, messages: upsertById(nextDetail.messages, msg) };
   } else if (evType === 'turn-item.updated') {
     const ti = parseTurnItem(payload);
-    if (ti) nextDetail = { ...nextDetail, turnItems: upsertById(nextDetail.turnItems, ti) };
+    const runStatuses = new Map<string, string>();
+    if (Array.isArray(acc.rawProjection.runs)) {
+      for (const r of acc.rawProjection.runs) {
+        const rr = record(r);
+        const rid = str(rr.id);
+        const rstatus = str(rr.status);
+        if (rid && rstatus) runStatuses.set(rid, rstatus);
+      }
+    }
+    const existingRawTurnItems = Array.isArray(acc.rawProjection.turnItems)
+      ? acc.rawProjection.turnItems.map(item => record(item))
+      : [];
+    const payloadId = str(payload.id);
+    if (payloadId) {
+      acc.rawProjection = {
+        ...acc.rawProjection,
+        turnItems: upsertById(existingRawTurnItems as Array<{ id: string }>, payload as { id: string }),
+      };
+    }
+    let nextMessages = nextDetail.messages;
+    const hasAnyActiveRun = Boolean(nextDetail.activeRunId || ACTIVE_RUN_STATUSES.has(nextDetail.thread.status));
+    const streamMsg = parseAssistantTurnItemMessage(payload, runStatuses, hasAnyActiveRun);
+    if (streamMsg) {
+      nextMessages = mergeAssistantTurnItemMessage(nextMessages, streamMsg);
+    }
+    if (ti || nextMessages !== nextDetail.messages) {
+      nextDetail = {
+        ...nextDetail,
+        ...(nextMessages !== nextDetail.messages ? { messages: nextMessages } : {}),
+        ...(ti ? { turnItems: upsertById(nextDetail.turnItems, ti) } : {}),
+      };
+    }
   } else if (evType === 'runtime-request.updated') {
     const rr = parseRuntimeRequest(payload, nextDetail.thread.threadId);
     if (rr) {
@@ -537,16 +631,47 @@ export function reduceThreadStreamItem(
     const runId = str(payload.id);
     const runStatus = str(payload.status);
     const runIds = runId && !nextDetail.runIds.includes(runId) ? [...nextDetail.runIds, runId] : nextDetail.runIds;
+    if (runId) {
+      const existingRuns = Array.isArray(acc.rawProjection.runs) ? acc.rawProjection.runs.map(r => record(r)) : [];
+      acc.rawProjection = {
+        ...acc.rawProjection,
+        runs: upsertById(existingRuns as Array<{ id: string }>, payload as { id: string }),
+      };
+    }
     const nextThread = runStatus ? { ...nextDetail.thread, status: runStatus } : nextDetail.thread;
-    const isActiveRun = Boolean(runStatus && ['running', 'starting', 'queued', 'waiting', 'preparing'].includes(runStatus));
+    const isActiveRun = Boolean(runStatus && ACTIVE_RUN_STATUSES.has(runStatus));
     const clearedActiveRun = Boolean(
       runStatus
       && !isActiveRun
       && (!nextDetail.activeRunId || nextDetail.activeRunId === runId),
     );
+    let nextMessages = nextDetail.messages;
+    if (runStatus && !isActiveRun) {
+      const messageIdsForRun = new Set<string>();
+      const rawTurnItems = Array.isArray(acc.rawProjection.turnItems) ? acc.rawProjection.turnItems : [];
+      for (const rawTi of rawTurnItems) {
+        const ti = record(rawTi);
+        if (str(ti.runId) === runId) {
+          const mid = str(ti.messageId) ?? str(ti.id);
+          if (mid) messageIdsForRun.add(mid);
+        }
+      }
+      if (messageIdsForRun.size > 0 || clearedActiveRun) {
+        let changed = false;
+        const finalized = nextMessages.map(m => {
+          if (m.streaming && (messageIdsForRun.has(m.id) || clearedActiveRun)) {
+            changed = true;
+            return { ...m, streaming: false };
+          }
+          return m;
+        });
+        if (changed) nextMessages = finalized;
+      }
+    }
     nextDetail = {
       ...nextDetail,
       thread: nextThread,
+      ...(nextMessages !== nextDetail.messages ? { messages: nextMessages } : {}),
       runIds,
       ...(runId ? { latestRunId: runId } : {}),
       ...(isActiveRun
@@ -558,7 +683,7 @@ export function reduceThreadStreamItem(
     const existingTurns = (Array.isArray(acc.rawProjection.providerTurns) ? acc.rawProjection.providerTurns : [])
       .map(t => record(t));
     const prevTurn = id ? existingTurns.find(t => str(t.id) === id) : undefined;
-    const mergedPayload = payload.tokenUsage === undefined && prevTurn?.tokenUsage !== undefined
+    const mergedPayload = payload.tokenUsage == null && prevTurn?.tokenUsage != null
       ? { ...payload, tokenUsage: prevTurn.tokenUsage }
       : payload;
     const nextTurns = id
@@ -568,8 +693,16 @@ export function reduceThreadStreamItem(
     nextDetail = { ...nextDetail, contextUsage: extractContextUsage(acc.rawProjection) };
   } else if (evType === 'provider-thread.updated') {
     const id = str(payload.id);
-    const existing = Array.isArray(acc.rawProjection.providerThreads) ? acc.rawProjection.providerThreads : [];
-    const nextPts = id ? upsertById(existing.map(t => record(t)) as Array<{ id: string }>, payload as { id: string }) : [...existing, payload];
+    const existing = Array.isArray(acc.rawProjection.providerThreads)
+      ? acc.rawProjection.providerThreads.map(t => record(t))
+      : [];
+    const prevPt = id ? existing.find(t => str(t.id) === id) : undefined;
+    const mergedPayload = {
+      ...payload,
+      ...(payload.contextUsage == null && prevPt?.contextUsage != null ? { contextUsage: prevPt.contextUsage } : {}),
+      ...(payload.tokenUsage == null && prevPt?.tokenUsage != null ? { tokenUsage: prevPt.tokenUsage } : {}),
+    };
+    const nextPts = id ? upsertById(existing as Array<{ id: string }>, mergedPayload as { id: string }) : [...existing, mergedPayload];
     const nextThread = id && str(payload.appThreadId) === nextDetail.thread.threadId && !isQueuedProviderThreadPlaceholder(payload)
       ? { ...record(acc.rawProjection.thread), activeProviderThreadId: id }
       : acc.rawProjection.thread;

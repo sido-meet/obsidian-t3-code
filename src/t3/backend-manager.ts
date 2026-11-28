@@ -36,6 +36,9 @@ export interface BackendManagerOptions {
   now?: () => number;
 }
 
+/** Thrown when configured workspace path conflicts with Vault security boundaries. */
+export class VaultSecurityError extends Error {}
+
 /**
  * Coordinates RPC First + CLI Fallback lifecycle, Vault path security enforcement,
  * and idempotent pending-write tracking across reconnects.
@@ -102,8 +105,12 @@ export class T3BackendManager {
 
   private async handleRpcDropped(reason: string): Promise<void> {
     if (this.activeBackend !== this.rpcBackend) return;
+    await this.rpcBackend.disconnect().catch(() => undefined);
     try {
       await this.cliBackend.connect(this.workspacePath, this.configuredProjectId);
+      if (this.configuredProjectId && typeof this.cliBackend.verifyWorkspaceProjectBinding === 'function') {
+        await this.cliBackend.verifyWorkspaceProjectBinding(this.configuredProjectId);
+      }
       this.activeBackend = this.cliBackend;
       this.store.setConnection('fallback-cli', { ...CLI_BACKEND_CAPABILITIES }, redactSensitiveText(reason));
       const [providers, threads] = await Promise.all([
@@ -143,9 +150,14 @@ export class T3BackendManager {
         && await this.vaultGuard.isOverlapping(this.vaultPath, serverRoot)
         && !(await this.vaultGuard.isOverlapping(this.vaultPath, this.workspacePath))
       ) {
-        await this.rpcBackend.disconnect();
-        this.resolvedServerRoot = undefined;
-        throw new Error('配置的项目 ID 在服务端指向当前知识库目录，但与所填项目目录不一致；请对齐后再连接。');
+        const msg = '配置的项目 ID 在服务端指向当前知识库目录，但与所填项目目录不一致；请对齐后再连接。';
+        await Promise.allSettled([
+          this.rpcBackend.disconnect(),
+          this.cliBackend.disconnect(),
+        ]);
+        this.activeBackend = this.cliBackend;
+        this.store.setConnection('disconnected', { ...CLI_BACKEND_CAPABILITIES }, msg);
+        throw new VaultSecurityError(msg);
       }
       this.activeBackend = this.rpcBackend;
       this.store.setConnection('connected-rpc', caps);
@@ -157,6 +169,8 @@ export class T3BackendManager {
       this.store.setThreads(threads);
       return caps;
     } catch (rpcErr) {
+      if (rpcErr instanceof VaultSecurityError) throw rpcErr;
+      await this.rpcBackend.disconnect().catch(() => undefined);
       const rpcReason = redactSensitiveText(rpcErr instanceof Error ? rpcErr.message : '无法连接本地 T3 Code RPC 服务。');
       return this.connectCliOnly(rpcReason);
     }
@@ -165,6 +179,9 @@ export class T3BackendManager {
   private async connectCliOnly(fallbackReason?: string): Promise<BackendCapabilities> {
     try {
       const caps = await this.cliBackend.connect(this.workspacePath, this.configuredProjectId);
+      if (this.configuredProjectId && typeof this.cliBackend.verifyWorkspaceProjectBinding === 'function') {
+        await this.cliBackend.verifyWorkspaceProjectBinding(this.configuredProjectId);
+      }
       this.activeBackend = this.cliBackend;
       this.store.setConnection('fallback-cli', caps, fallbackReason);
       const [providers, threads] = await Promise.all([
@@ -213,8 +230,9 @@ export class T3BackendManager {
   }
 
   async openThread(threadId: string, onEvent?: (event: BackendEvent) => void): Promise<{ unsubscribe: () => void }> {
-    return this.activeBackend.openThread(threadId, event => {
-      if (event.type === 'thread.detail') {
+    const backend = this.activeBackend;
+    return backend.openThread(threadId, event => {
+      if (event.type === 'thread.detail' && backend.mode !== 'rpc') {
         this.store.setThreadDetail(threadId, event.detail);
       }
       onEvent?.(event);

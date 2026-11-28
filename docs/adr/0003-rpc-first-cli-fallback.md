@@ -1,7 +1,7 @@
 # ADR-0003: RPC First + CLI Fallback 混合后端架构与统一状态层设计
 
 ## 状态 (Status)
-**Implemented (M0–M6 Verified on `feat/sidebar-v2-redesign`)**（已完成 M0–M6 全阶段实施与验证：M0 迁移至原生 `MarkdownRenderer.render()` 后 `main.js` 降至 `60,192` 字节，M1–M6 完成后终版 `main.js` 为 `141,443` 字节，远低于 `204,800` 字节门禁上限；桌面端自动发现 T3 CLI 签发纯内存短期 Session 并支持纯内存配对备选；已通过独立 Code Review、`23` 文件 / `112` 测试套件及本机 `0.1.13-nightly.20261125.5258` 服务端全链路 E2E 验证）
+**Implemented (M0–M8 Verified on `feat/sidebar-v2-redesign`)**（已完成 M0–M8 全阶段实施、独立 Code Review 闭环、真实 Obsidian 1.15.1 桌面端自动化验收与 M8 部署准备：终版 `main.js` 为 `150,112` 字节（远低于 `204,800` 字节门禁上限）；桌面端自动发现 T3 CLI 签发纯内存短期 Session 并支持纯内存配对备选；已通过最终代码后的 `23` 文件 / `119` 测试套件（`89.3%` Stmts）、Windows PowerShell 5.1 + PowerShell 7 模拟 Vault 部署/单备份回滚校验及隔离 Obsidian `1.15.1` 全 8 步实测；正式生产 Vault 等待用户最终批准后部署，详见证 [2026-11-28-m7-m8-acceptance-report.md](../releases/2026-11-28-m7-m8-acceptance-report.md)）
 
 ## 日期
 2026-11-28

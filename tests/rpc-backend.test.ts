@@ -483,4 +483,194 @@ describe('RpcBackend', () => {
     }
     await backend.disconnect();
   });
+
+  it('invokes onThreadReady strictly between thread.create and message.dispatch, and aborts connect cleanly when disconnect races mid-handshake', async () => {
+    const order: string[] = [];
+    const harness = createHarness({
+      socketResponder: (socket, frame) => {
+        queueMicrotask(() => {
+          if (frame.tag === 'server.getConfig') {
+            socket.receive({ _tag: 'Exit', requestId: frame.id, exit: { _tag: 'Success', value: { providers: [] } } });
+          } else if (frame.tag === 'orchestration.dispatchCommand') {
+            const payload = frame.payload as Record<string, unknown>;
+            order.push(`dispatch:${String(payload.type)}`);
+            socket.receive({ _tag: 'Exit', requestId: frame.id, exit: { _tag: 'Success', value: { sequence: 300 } } });
+          } else if (frame.tag === 'orchestration.subscribeThread') {
+            order.push(`subscribe:${String((frame.payload as Record<string, unknown>).threadId)}`);
+            socket.receive({
+              _tag: 'Chunk',
+              requestId: frame.id,
+              values: [
+                { kind: 'snapshot', snapshotSequence: 299, projection: { thread: { id: (frame.payload as Record<string, unknown>).threadId, status: 'idle' }, messages: [] } },
+                { kind: 'synchronized' },
+              ],
+            });
+          }
+        });
+      },
+    });
+
+    await harness.backend.connect('E:\\Repo', 'proj-1');
+    const sent = await harness.backend.sendMessage({
+      projectId: 'proj-1',
+      commandId: 'cmd-seq',
+      messageId: 'msg-seq',
+      text: 'stream me',
+      onThreadReady: async tid => {
+        order.push(`onThreadReady:${tid}`);
+        await harness.backend.openThread(tid, () => undefined);
+      },
+    });
+
+    expect(order[0]).toBe('dispatch:thread.create');
+    expect(order[1]).toBe(`onThreadReady:${sent.threadId}`);
+    expect(order[2]).toBe(`subscribe:${sent.threadId}`);
+    expect(order[3]).toBe('dispatch:message.dispatch');
+    await harness.backend.disconnect();
+
+    // Race disconnect() while connect() is awaiting discovery -> must reject cancelled cleanly and leave 0 open sockets
+    let resolveDiscover!: () => void;
+    const socketsCreated: MockRpcSocket[] = [];
+    const runCliRace = vi.fn(async (_exe: string, args: string[]) => {
+      if (args.includes('issue')) return JSON.stringify({ token: 'tok-race', sessionId: 'sess-race' });
+      return '';
+    });
+    const raceBackend = new RpcBackend({
+      getSettings: () => ({ cliPath: '/usr/bin/t3', provider: 'codex', model: 'gpt-5', modelPresets: '' }),
+      auth: new T3AuthManager({ platform: 'linux', runCli: runCliRace, fetcher: harness.fetcher }),
+      discoverCliFn: () => '/usr/bin/t3',
+      resolveT3HomeFn: () => '/home/user/.t3',
+      discoverFn: () => new Promise(resolve => {
+        resolveDiscover = () => resolve({
+          origin: 'http://127.0.0.1:3773',
+          environmentId: 'env-1',
+          serverVersion: '0.1.13',
+          orchestrationProtocolVersion: 2,
+          capabilities: {},
+        });
+      }),
+      createWebSocket: () => {
+        const s = new MockRpcSocket();
+        socketsCreated.push(s);
+        return s;
+      },
+    });
+    const connectPromise = raceBackend.connect('E:\\Repo', 'proj-1');
+    await raceBackend.disconnect();
+    resolveDiscover();
+    await expect(connectPromise).rejects.toThrow('取消或替代');
+    expect(socketsCreated).toHaveLength(0);
+  });
+
+  it('cleans up socket without arming reconnect on initial establishTransport failure and does not revoke session on overlapping connect()', async () => {
+    const socketsCreated: MockRpcSocket[] = [];
+    const runCli = vi.fn(async (_exe: string, args: string[]) => {
+      if (args.includes('issue')) return JSON.stringify({ token: 'tok-init', sessionId: 'sess-init' });
+      return '';
+    });
+    const fetcher = vi.fn<typeof fetch>(async input => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/session')) {
+        return new Response(JSON.stringify({ authenticated: true, scopes: ['orchestration:read', 'orchestration:operate'] }), { status: 200 });
+      }
+      if (url.includes('/api/auth/websocket-ticket')) {
+        return new Response(JSON.stringify({ ticket: 'wst-1' }), { status: 200 });
+      }
+      if (url.includes('/api/orchestration/shell')) {
+        return new Response('server error', { status: 500 });
+      }
+      return new Response('{}', { status: 404 });
+    });
+    const auth = new T3AuthManager({ platform: 'linux', runCli, fetcher });
+    const backend = new RpcBackend({
+      getSettings: () => ({ cliPath: '/usr/bin/t3', provider: 'codex', model: 'gpt-5', modelPresets: '' }),
+      auth,
+      fetcher,
+      discoverCliFn: () => '/usr/bin/t3',
+      resolveT3HomeFn: () => '/home/user/.t3',
+      discoverFn: async () => ({
+        origin: 'http://127.0.0.1:3773',
+        environmentId: 'env-1',
+        serverVersion: '0.1.13',
+        orchestrationProtocolVersion: 2,
+        capabilities: {},
+      }),
+      createWebSocket: () => {
+        const s = new MockRpcSocket();
+        socketsCreated.push(s);
+        s.open();
+        return s;
+      },
+    });
+
+    await expect(backend.connect('E:\\Repo', 'proj-1')).rejects.toThrow('500');
+    expect(socketsCreated).toHaveLength(1);
+    expect(socketsCreated[0].closed).toBe(true);
+    await new Promise(r => setTimeout(r, 30));
+    expect(socketsCreated).toHaveLength(1);
+
+    // Overlapping connect() must NOT call revoke on superseded connect()
+    let releaseFirst!: () => void;
+    let discoverCount = 0;
+    const okFetcher = vi.fn<typeof fetch>(async input => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/session')) {
+        return new Response(JSON.stringify({ authenticated: true, scopes: ['orchestration:read', 'orchestration:operate'] }), { status: 200 });
+      }
+      if (url.includes('/api/auth/websocket-ticket')) {
+        return new Response(JSON.stringify({ ticket: 'wst-2' }), { status: 200 });
+      }
+      if (url.includes('/api/orchestration/shell')) {
+        return new Response(JSON.stringify({ snapshotSequence: 1, projects: [], threads: [] }), { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    });
+    const overlapCli = vi.fn(async (_exe: string, args: string[]) => {
+      if (args.includes('issue')) {
+        await new Promise<void>(resolve => { releaseFirst = resolve; });
+        return JSON.stringify({ token: 'tok-shared', sessionId: 'sess-shared' });
+      }
+      return '';
+    });
+    const overlapBackend = new RpcBackend({
+      getSettings: () => ({ cliPath: '/usr/bin/t3', provider: 'codex', model: 'gpt-5', modelPresets: '' }),
+      auth: new T3AuthManager({ platform: 'linux', runCli: overlapCli, fetcher: okFetcher }),
+      fetcher: okFetcher,
+      discoverCliFn: () => '/usr/bin/t3',
+      resolveT3HomeFn: () => '/home/user/.t3',
+      discoverFn: async () => {
+        discoverCount++;
+        if (discoverCount === 2) await new Promise(r => setTimeout(r, 5));
+        return {
+          origin: 'http://127.0.0.1:3773',
+          environmentId: 'env-1',
+          serverVersion: '0.1.13',
+          orchestrationProtocolVersion: 2,
+          capabilities: {},
+        };
+      },
+      createWebSocket: () => {
+        const s = new MockRpcSocket();
+        const origSend = s.send.bind(s);
+        s.send = raw => {
+          origSend(raw);
+          const f = JSON.parse(raw) as Record<string, unknown>;
+          if (f.tag === 'server.getConfig') {
+            queueMicrotask(() => s.receive({ _tag: 'Exit', requestId: f.id, exit: { _tag: 'Success', value: { providers: [] } } }));
+          }
+        };
+        s.open();
+        return s;
+      },
+    });
+    const p1 = overlapBackend.connect('E:\\Repo', 'proj-1');
+    await new Promise(r => setTimeout(r, 1));
+    const p2 = overlapBackend.connect('E:\\Repo', 'proj-1');
+    await new Promise(r => setTimeout(r, 15));
+    releaseFirst();
+    await expect(p1).rejects.toThrow('取消或替代');
+    await expect(p2).resolves.toBeDefined();
+    expect(overlapCli).not.toHaveBeenCalledWith(expect.anything(), expect.arrayContaining(['revoke']), expect.anything(), expect.anything());
+    await overlapBackend.disconnect();
+  });
 });

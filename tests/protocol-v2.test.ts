@@ -402,4 +402,145 @@ describe('protocol-v2 normalizers', () => {
       source: 'providerTurn',
     });
   });
+
+  it('streams progressive assistant_message turn-item.updated deltas into messages and hydrates mid-turn snapshots', () => {
+    // 1. Mid-turn bounded/snapshot hydration when message is still only in turnItems
+    const midSnap = parseThreadSnapshot({
+      snapshotSequence: 5,
+      projection: {
+        thread: { id: 'th-stream', status: 'running' },
+        messages: [{ id: 'u1', role: 'user', text: 'Write guide', streaming: false }],
+        turnItems: [{ id: 'ti-asst', type: 'assistant_message', messageId: 'm-asst-1', text: 'Partial...', streaming: true }],
+      },
+    }, 'th-stream');
+    expect(midSnap.detail.messages).toEqual([
+      { id: 'u1', role: 'user', text: 'Write guide', streaming: false },
+      { id: 'm-asst-1', role: 'assistant', text: 'Partial...', streaming: true },
+    ]);
+
+    // 2. Progressive turn-item.updated deltas followed by final message.updated merge by messageId without duplicates
+    const acc: ThreadStreamAccumulator = { rawProjection: {}, seenEventIds: new Set() };
+    reduceThreadStreamItem(acc, {
+      kind: 'snapshot',
+      snapshotSequence: 1,
+      projection: { thread: { id: 'th-stream', status: 'running' }, messages: [{ id: 'u1', role: 'user', text: 'hi', streaming: false }], turnItems: [] },
+    }, 'th-stream');
+
+    const d1 = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 2,
+      event: { id: 'ev-a1', type: 'turn-item.updated', payload: { id: 'ti-1', type: 'assistant_message', messageId: 'm-1', text: '## 1. First\n', streaming: true } },
+    }, 'th-stream');
+    expect(d1.detail?.messages).toHaveLength(2);
+    expect(d1.detail?.messages[1]).toEqual({ id: 'm-1', role: 'assistant', text: '## 1. First\n', streaming: true });
+
+    const d2 = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 3,
+      event: { id: 'ev-a2', type: 'turn-item.updated', payload: { id: 'ti-1', type: 'assistant_message', messageId: 'm-1', text: '## 1. First\n\n## 2. Second', streaming: true } },
+    }, 'th-stream');
+    expect(d2.detail?.messages[1]).toEqual({ id: 'm-1', role: 'assistant', text: '## 1. First\n\n## 2. Second', streaming: true });
+
+    // Terminal message.updated finalizes same message id with streaming: false
+    const fin = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 4,
+      event: { id: 'ev-fin', type: 'message.updated', payload: { id: 'm-1', role: 'assistant', text: '## 1. First\n\n## 2. Second\nDone.', streaming: false } },
+    }, 'th-stream');
+    expect(fin.detail?.messages).toHaveLength(2);
+    expect(fin.detail?.messages[1]).toEqual({ id: 'm-1', role: 'assistant', text: '## 1. First\n\n## 2. Second\nDone.', streaming: false });
+
+    // Stale/reordered or late non-streaming/textOmitted turn-item update must NEVER overwrite finalized message or blank it
+    const stale = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 5,
+      event: { id: 'ev-stale', type: 'turn-item.updated', payload: { id: 'ti-1', type: 'assistant_message', messageId: 'm-1', text: 'Stale', streaming: true } },
+    }, 'th-stream');
+    expect(stale.detail?.messages[1]).toEqual({ id: 'm-1', role: 'assistant', text: '## 1. First\n\n## 2. Second\nDone.', streaming: false });
+    const lateNonStreaming = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 6,
+      event: { id: 'ev-late-compacted', type: 'turn-item.updated', payload: { id: 'ti-1', type: 'assistant_message', messageId: 'm-1', text: 'Truncated', streaming: false } },
+    }, 'th-stream');
+    expect(lateNonStreaming.detail?.messages[1]?.text).toBe('## 1. First\n\n## 2. Second\nDone.');
+    const omitted = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 7,
+      event: { id: 'ev-omit', type: 'turn-item.updated', payload: { id: 'ti-1', type: 'assistant_message', messageId: 'm-1', text: 'Omitted note', textOmitted: true } },
+    }, 'th-stream');
+    expect(omitted.detail?.messages[1]?.text).toBe('## 1. First\n\n## 2. Second\nDone.');
+  });
+
+  it('infers assistant_message streaming when omitted, replaces streaming snapshot placeholders, clears streaming on run end, and preserves usage across null updates', () => {
+    // 1. Mid-turn snapshot replaces empty streaming placeholder with richer turnItems text, while completed run sets omitted streaming to false
+    const midPlaceholderSnap = parseThreadSnapshot({
+      snapshotSequence: 9,
+      projection: {
+        thread: { id: 'th-h1', status: 'running', activeRunId: 'r-1' },
+        runs: [{ id: 'r-1', status: 'running' }],
+        messages: [{ id: 'm-a', role: 'assistant', text: '', streaming: true }],
+        turnItems: [{ id: 'ti-a', type: 'assistant_message', messageId: 'm-a', runId: 'r-1', text: 'Mid-turn partial' }],
+      },
+    }, 'th-h1');
+    expect(midPlaceholderSnap.detail.messages).toEqual([
+      { id: 'm-a', role: 'assistant', text: 'Mid-turn partial', streaming: true },
+    ]);
+
+    const completedSnap = parseThreadSnapshot({
+      snapshotSequence: 10,
+      projection: {
+        thread: { id: 'th-h1', status: 'completed' },
+        runs: [{ id: 'r-1', status: 'completed' }],
+        messages: [],
+        turnItems: [{ id: 'ti-a', type: 'assistant_message', messageId: 'm-a', runId: 'r-1', text: 'Final text' }],
+      },
+    }, 'th-h1');
+    expect(completedSnap.detail.messages[0]?.streaming).toBe(false);
+
+    // 2. Live turn-item.updated without explicit boolean streaming starts streaming, then run.updated terminal clears streaming
+    const acc: ThreadStreamAccumulator = { rawProjection: {}, seenEventIds: new Set() };
+    reduceThreadStreamItem(acc, {
+      kind: 'snapshot',
+      snapshotSequence: 1,
+      projection: { thread: { id: 'th-h1', status: 'running', activeRunId: 'r-2' }, runs: [{ id: 'r-2', status: 'running' }], messages: [] },
+    }, 'th-h1');
+    const liveNoFlag = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 2,
+      event: { id: 'ev-1', type: 'turn-item.updated', payload: { id: 'ti-2', type: 'assistant_message', messageId: 'm-2', runId: 'r-2', text: 'Chunk 1' } },
+    }, 'th-h1');
+    expect(liveNoFlag.detail?.messages[0]).toEqual({ id: 'm-2', role: 'assistant', text: 'Chunk 1', streaming: true });
+
+    const runEnded = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 3,
+      event: { id: 'ev-2', type: 'run.updated', payload: { id: 'r-2', status: 'completed' } },
+    }, 'th-h1');
+    expect(runEnded.detail?.messages[0]?.streaming).toBe(false);
+
+    // 3. Explicit null tokenUsage / contextUsage does not wipe previously reported usage
+    reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 4,
+      event: { id: 'ev-u1', type: 'provider-turn.updated', payload: { id: 'pturn-1', tokenUsage: { usedTokens: 400, maxTokens: 1000 } } },
+    }, 'th-h1');
+    const nullTurn = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 5,
+      event: { id: 'ev-u2', type: 'provider-turn.updated', payload: { id: 'pturn-1', tokenUsage: null } },
+    }, 'th-h1');
+    expect(nullTurn.detail?.contextUsage).toMatchObject({ status: 'available', usedTokens: 400, maxTokens: 1000 });
+
+    reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 6,
+      event: { id: 'ev-p1', type: 'provider-thread.updated', payload: { id: 'pt-1', appThreadId: 'th-h1', contextUsage: { usedTokens: 500, maxTokens: 1000 } } },
+    }, 'th-h1');
+    const nullPt = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 7,
+      event: { id: 'ev-p2', type: 'provider-thread.updated', payload: { id: 'pt-1', appThreadId: 'th-h1', contextUsage: null } },
+    }, 'th-h1');
+    expect(nullPt.detail?.contextUsage).toMatchObject({ status: 'available', usedTokens: 400, maxTokens: 1000 });
+  });
 });

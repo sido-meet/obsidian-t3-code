@@ -136,6 +136,8 @@ export class RpcBackend implements T3Backend {
   private readonly pendingCreateThreads = new Map<string, string>();
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private intentionalClose = true;
+  private explicitDisconnect = false;
+  private connectEpoch = 0;
 
   constructor(private readonly options: RpcBackendOptions) {
     this.auth = options.auth ?? new T3AuthManager({ fetcher: options.fetcher });
@@ -353,7 +355,10 @@ export class RpcBackend implements T3Backend {
       this.shellSequence = parsed.snapshotSequence;
       this.shellProjects = parsed.projects;
       this.shellThreads = parsed.threads;
-      void this.resolveEffectiveProjectId().then(() => this.syncThreadsToStore());
+      const epoch = this.connectEpoch;
+      void this.resolveEffectiveProjectId().then(() => {
+        if (epoch === this.connectEpoch && !this.intentionalClose) this.syncThreadsToStore();
+      });
       return;
     }
     if (kind === 'snapshot-required') {
@@ -389,7 +394,10 @@ export class RpcBackend implements T3Backend {
         this.shellProjects = idx < 0
           ? [...this.shellProjects, nextProj]
           : this.shellProjects.map(existing => existing.id === nextProj.id ? nextProj : existing);
-        void this.resolveEffectiveProjectId().then(() => this.syncThreadsToStore());
+        const epoch = this.connectEpoch;
+        void this.resolveEffectiveProjectId().then(() => {
+          if (epoch === this.connectEpoch && !this.intentionalClose) this.syncThreadsToStore();
+        });
       }
     }
   }
@@ -467,6 +475,7 @@ export class RpcBackend implements T3Backend {
 
   private async resyncThreadOverHttp(sub: ThreadSubscriptionState): Promise<void> {
     if (sub.resyncing) return;
+    const epoch = this.connectEpoch;
     sub.resyncing = true;
     try {
       for (const listener of [...sub.listeners]) {
@@ -476,12 +485,14 @@ export class RpcBackend implements T3Backend {
         `/api/orchestration/threads/${encodeURIComponent(sub.threadId)}/bounded?compactTurnItems=1&deferWork=1`,
         { isOrchestration: true },
       );
+      if (epoch !== this.connectEpoch || this.threadSubs.get(sub.threadId) !== sub || this.intentionalClose) return;
       const parsed = parseThreadSnapshot(raw, sub.threadId);
       sub.acc.rawProjection = parsed.rawProjection;
       sub.acc.seenEventIds.clear();
       sub.acc.detail = { ...parsed.detail, synchronized: true };
       this.emitThreadDetail(sub, sub.acc.detail);
     } catch (error) {
+      if (epoch !== this.connectEpoch || this.threadSubs.get(sub.threadId) !== sub) return;
       const message = redactSensitiveText(error instanceof Error ? error.message : '重新同步会话失败。');
       for (const listener of [...sub.listeners]) {
         listener({ type: 'error', message });
@@ -517,6 +528,10 @@ export class RpcBackend implements T3Backend {
 
   private scheduleReconnect(attempt = 0): void {
     if (this.intentionalClose || !this.server) return;
+    if (this.reconnectTimer) {
+      this.clearTimer(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
     if (attempt >= MAX_RECONNECT_ATTEMPTS) {
       this.options.onReconnectExhausted?.('与本地 T3 Code 服务断线且重连次数已达上限。');
       return;
@@ -524,23 +539,34 @@ export class RpcBackend implements T3Backend {
     const baseMs = Math.min(1000 * (2 ** attempt), 30_000);
     const jitterMs = Math.round(baseMs * (0.5 + 0.5 * this.randomFn()));
     this.reconnectTimer = this.setTimer(() => {
+      this.reconnectTimer = undefined;
       void this.attemptReconnect(attempt);
     }, jitterMs);
   }
 
   private async attemptReconnect(attempt: number): Promise<void> {
     if (this.intentionalClose || !this.server) return;
+    const epoch = this.connectEpoch;
     try {
-      await this.establishTransport(true);
+      await this.establishTransport(true, epoch);
     } catch {
-      this.scheduleReconnect(attempt + 1);
+      if (!this.intentionalClose && epoch === this.connectEpoch) {
+        this.scheduleReconnect(attempt + 1);
+      }
     }
   }
 
-  private async establishTransport(isReconnect: boolean): Promise<void> {
+  private async establishTransport(isReconnect: boolean, expectedEpoch = this.connectEpoch): Promise<void> {
     this.cleanupSocketAndSubs();
     const ticket = await this.mintWsTicket();
+    if (expectedEpoch !== this.connectEpoch) {
+      throw new Error('T3 RPC 连接已被取消或替代。');
+    }
     const rpc = await this.openRpcSocket(ticket);
+    if (expectedEpoch !== this.connectEpoch) {
+      rpc.close();
+      throw new Error('T3 RPC 连接已被取消或替代。');
+    }
     this.rpc = rpc;
 
     void rpc.disconnected.then(() => {
@@ -549,14 +575,25 @@ export class RpcBackend implements T3Backend {
       this.scheduleReconnect(0);
     });
 
-    await Promise.all([
-      this.fetchShellSnapshot(isReconnect && this.shellSequence > 0 ? this.shellSequence : undefined),
-      this.getProviders(false),
-    ]);
-    await this.attachSubscriptions(isReconnect);
+    try {
+      await Promise.all([
+        this.fetchShellSnapshot(isReconnect && this.shellSequence > 0 ? this.shellSequence : undefined),
+        this.getProviders(false),
+      ]);
+      if (expectedEpoch !== this.connectEpoch) {
+        this.cleanupSocketAndSubs();
+        throw new Error('T3 RPC 连接已被取消或替代。');
+      }
+      await this.attachSubscriptions(isReconnect);
+    } catch (error) {
+      this.cleanupSocketAndSubs();
+      throw error;
+    }
   }
 
   async connect(projectWorkspacePath: string, projectId: string): Promise<BackendCapabilities> {
+    const epoch = ++this.connectEpoch;
+    this.explicitDisconnect = false;
     this.intentionalClose = true;
     if (this.reconnectTimer) {
       this.clearTimer(this.reconnectTimer);
@@ -570,21 +607,53 @@ export class RpcBackend implements T3Backend {
     this.requestedProjectId = projectId.trim();
 
     const discover = this.options.discoverFn ?? discoverLocalServer;
-    const { cliPath } = this.getCliContext();
-    this.server = await discover({
+    const { cliPath, t3Home } = this.getCliContext();
+    const discovered = await discover({
       serverUrl: this.options.getSettings().serverUrl?.trim() || undefined,
       cliPath,
     });
+    if (epoch !== this.connectEpoch) {
+      if (this.explicitDisconnect) {
+        await this.auth.revokeAndClear(cliPath, t3Home).catch(() => undefined);
+      }
+      throw new Error('T3 RPC 连接已被取消或替代。');
+    }
+    this.server = discovered;
     this.serverCapabilities = this.server.capabilities;
     this.capabilities = toBackendCapabilities(this.serverCapabilities);
 
     await this.ensureSession();
+    if (epoch !== this.connectEpoch) {
+      if (this.explicitDisconnect) {
+        await this.auth.revokeAndClear(cliPath, t3Home).catch(() => undefined);
+      }
+      throw new Error('T3 RPC 连接已被取消或替代。');
+    }
+    try {
+      await this.establishTransport(false, epoch);
+    } catch (error) {
+      this.intentionalClose = true;
+      if (this.reconnectTimer) {
+        this.clearTimer(this.reconnectTimer);
+        this.reconnectTimer = undefined;
+      }
+      this.cleanupSocketAndSubs();
+      throw error;
+    }
+    if (epoch !== this.connectEpoch || !this.rpc) {
+      this.cleanupSocketAndSubs();
+      if (this.explicitDisconnect) {
+        await this.auth.revokeAndClear(cliPath, t3Home).catch(() => undefined);
+      }
+      throw new Error('T3 RPC 连接已被取消或替代。');
+    }
     this.intentionalClose = false;
-    await this.establishTransport(false);
     return this.capabilities;
   }
 
   async disconnect(): Promise<void> {
+    this.connectEpoch++;
+    this.explicitDisconnect = true;
     this.intentionalClose = true;
     if (this.reconnectTimer) {
       this.clearTimer(this.reconnectTimer);
@@ -723,6 +792,13 @@ export class RpcBackend implements T3Backend {
         createdBy: 'user',
         creationSource: 'web',
       }, true);
+      if (input.onThreadReady) {
+        try {
+          await input.onThreadReady(threadId);
+        } catch {
+          // Best-effort pre-dispatch subscription; send() attaches if stream was not opened.
+        }
+      }
     }
 
     const result = await this.dispatchCommand({

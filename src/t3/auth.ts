@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { win32 } from 'node:path';
 import { cliInvocation } from './cli';
 import { parseT3CmdLauncher, validateLoopbackOrigin } from './discovery';
-import { record } from './rpc';
+import { record, redactSensitiveText } from './rpc';
+export { redactSensitiveText };
 
 const REQUIRED_SCOPES = ['orchestration:read', 'orchestration:operate'] as const;
 const RENEW_MARGIN_MS = 60_000;
@@ -29,13 +30,6 @@ export interface AuthDeps {
   now?: () => number;
 }
 
-/** Redacts bearer tokens, DPoP tokens, WS tickets, and auth URL parameters from error messages and diagnostics. */
-export function redactSensitiveText(text: string): string {
-  return text
-    .replace(/\b(Bearer|DPoP)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
-    .replace(/([?&](?:wsTicket|token|access_token|subject_token|code)=)[^&\s#]+/gi, '$1[REDACTED]')
-    .replace(/("(?:token|access_token|subject_token|ticket|secret)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2');
-}
 
 function resolveCliCommand(cliPath: string, args: string[], deps: AuthDeps): {
   executable: string;
@@ -273,33 +267,37 @@ export class T3AuthManager {
       client_label: 'T3-Codian',
     });
 
-    const res = await this.fetcher()(new URL('/oauth/token', origin), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-      credentials: 'omit',
-      redirect: 'error',
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) {
-      throw new Error(`配对码兑换失败（HTTP ${res.status}）。请重新在 T3 Code 生成配对码。`);
+    try {
+      const res = await this.fetcher()(new URL('/oauth/token', origin), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
+        credentials: 'omit',
+        redirect: 'error',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        throw new Error(`配对码兑换失败（HTTP ${res.status}）。请重新在 T3 Code 生成配对码。`);
+      }
+      const reply = record(await res.json());
+      if (reply.token_type !== 'Bearer' || typeof reply.access_token !== 'string' || !reply.access_token) {
+        throw new Error('T3 Code 未返回有效的 Bearer 访问凭据。');
+      }
+      const verified = await this.verifyHttpSession(origin, reply.access_token);
+      const ttlMs = typeof reply.expires_in === 'number' && reply.expires_in > 0 ? reply.expires_in * 1000 : undefined;
+      const next: AuthSession = {
+        token: reply.access_token,
+        environmentId: options.environmentId,
+        origin,
+        expiresAt: verified.expiresAt ?? (ttlMs ? this.now() + ttlMs : undefined),
+        issuedByCli: false,
+      };
+      this.session = next;
+      this.lastFailureAt = undefined;
+      return next;
+    } catch (error) {
+      throw new Error(redactSensitiveText(error instanceof Error ? error.message : '配对码兑换失败。'), { cause: error });
     }
-    const reply = record(await res.json());
-    if (reply.token_type !== 'Bearer' || typeof reply.access_token !== 'string' || !reply.access_token) {
-      throw new Error('T3 Code 未返回有效的 Bearer 访问凭据。');
-    }
-    const verified = await this.verifyHttpSession(origin, reply.access_token);
-    const ttlMs = typeof reply.expires_in === 'number' && reply.expires_in > 0 ? reply.expires_in * 1000 : undefined;
-    const next: AuthSession = {
-      token: reply.access_token,
-      environmentId: options.environmentId,
-      origin,
-      expiresAt: verified.expiresAt ?? (ttlMs ? this.now() + ttlMs : undefined),
-      issuedByCli: false,
-    };
-    this.session = next;
-    this.lastFailureAt = undefined;
-    return next;
   }
 
   async renewOnUnauthorized(options: {

@@ -165,3 +165,24 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - `usageLimits` 诚实反映各 Provider 上行支持情况（本机实测 `codex`/`claudeAgent` 返回 `unsupported`，`antigravity` 返回 `unknown`）。
   - 仅支持 Obsidian 桌面端（依赖本机回环发现与 CLI 进程通信），不支持移动端。
   - 尚未自动覆盖用户正式知识库 `E:\Documents\Obsidian-Vault`，待用户审阅分支并按部署说明手动拷贝测试。
+
+
+---
+
+## 2026-11-28 — M7 & M8 完成：真实 Obsidian 桌面端验收、独立 Review 闭环与上线部署准备
+
+- **状态**：已完成 **M7（真实 Obsidian 1.15.1 桌面端自动化验收 + 定向缺陷修复 + 独立 Code Review 全闭环）** 与 **M8（发布说明、部署/回滚脚本及上线前只读核验）**。所有开发工作保持在独立特性分支 `feat/sidebar-v2-redesign`（worktree）；`main` 分支与用户正式知识库 `E:\Documents\Obsidian-Vault` 均**保持零修改**，等待用户审阅并明确批准后再执行生产 Vault 部署。
+- **阶段关键修复与工程产出**：
+  - **协议实时增量流式落地**（[src/t3/protocol-v2.ts](../src/t3/protocol-v2.ts)）：对齐本机 T3 Server v2 实测帧契约，解析并归约 `turn-item.updated`（`type: 'assistant_message'`）与快照中 `turnItems` 的增量文本流；补充缺失 `streaming` 时的状态推断、`textOmitted` 过滤、终态锁防覆写与 `run.updated` 终态清理，以及 `provider-turn.updated` / `provider-thread.updated` 遇到 `null` 时保留既有实时用量。
+  - **首轮预订阅竞态、连接生命周期与安全加固**（[src/t3/rpc-backend.ts](../src/t3/rpc-backend.ts)、[src/t3/backend-manager.ts](../src/t3/backend-manager.ts)、[src/t3/cli-backend.ts](../src/t3/cli-backend.ts)、[src/t3/rpc.ts](../src/t3/rpc.ts)、[src/t3/auth.ts](../src/t3/auth.ts)）：新增 `onThreadReady`（`thread.create` 与 `message.dispatch` 间同步订阅）、`VaultSecurityError` 根目录冲突 fail-closed 拒降级、CLI `verifyWorkspaceProjectBinding()`、全局集中管理 `pollerCancels` 与 Turn 2 有界宽限唤醒、`explicitDisconnect` 会话吊销隔离及全场景凭据脱敏。
+  - **UI 交互、滚动保真与 Obsidian CSS 作用域收敛**（[src/ui/ObsidianT3CodeView.ts](../src/ui/ObsidianT3CodeView.ts)、[styles.css](../styles.css)）：修复流式结束重建 DOM 行导致的闪烁、`wasNearBottom` 捕获时机、`.t3c-mp-filter` 焦点/光标保留、待确认横幅按标签页隔离与关闭清理，以及 `.obsidian-t3-code` 前缀覆盖 Obsidian 原生按钮/输入框/权限弹层溢出与高亮样式。
+  - **部署与回滚自动化 + 发布文档**：新增 [scripts/deploy-obsidian.ps1](../scripts/deploy-obsidian.ps1)、[scripts/rollback-obsidian.ps1](../scripts/rollback-obsidian.ps1)（含 SHA-256 双重核验、`data.json` 无损保留、失败自动恢复及 Windows PowerShell 5.1 单备份兼容修复）、[CHANGELOG.md](../CHANGELOG.md) 与 [M7/M8 验收报告](releases/2026-11-28-m7-m8-acceptance-report.md)。
+- **最终代码门禁与实机验收结果（均在最终一次编辑后实跑通过）**：
+  - `npm run typecheck`：退出码 `0`
+  - `npm run lint`（`eslint . --max-warnings=0`）：退出码 `0`
+  - `npm run test:coverage`：**`23` 个测试文件 / `119` 条测试全过**（总覆盖率 **`89.3%` Stmts / `81.87%` Branch / `91.64%` Funcs**）
+  - `npm run build` + `verify-bundle.mjs`：`main.js` **`150,112` 字节**（`< 204,800` 上限，`SHA256=5E2C348F...`）、`styles.css` **`23,524` 字节**、`manifest.json` **`303` 字节**
+  - 独立 Code Review（`bc88412f-2d19-44ab-baf1-d7234b54c4fb`）：`0` Critical、`4` High（`H1`–`H4`）、`7` Medium（`M1`–`M7`）、`5` Low（`L1`–`L5`），全部 High/Medium 及关键 Low 均已闭环。
+  - 隔离 Obsidian Desktop `1.15.1`（`--user-data-dir` + CDP `9239`）第 1–8 步全量通过：`1s` 完成 RPC 自动建连、161 模型搜索与刷新保焦点、`18` 次流式增量 + 表格/代码复制/KaTeX 渲染 + `23,943 / 950,000` (`3%`) 实时用量、权限同步及弹层无溢出、`680px` 宽双栏与浅色 `moonstone` 主题、`dataviewjs-canary` + `MarkdownRenderer.render` 前置净化验证通过（`0` 执行/`0` 危险节点）、上滑读历史滚动锁与 mid-stream Stop、双 Leaf 生命周期与 **`0` 条未吊销残留 `t3-codian` 会话**。
+  - 模拟 Vault 部署与 Windows PowerShell 5.1 单备份回滚闭环全绿；对 `E:\Documents\Obsidian-Vault` 只读 `-DryRun` 确认旧 `data.json`（`cliPath, projectPath, provider, model, includeNote, projectId`）可无损继承。
+- **待办**：等待用户审阅本报告后批准执行 `scripts/deploy-obsidian.ps1` 部署至 `E:\Documents\Obsidian-Vault`。
