@@ -84,3 +84,16 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - [src/ui/ObsidianT3CodeView.ts](../src/ui/ObsidianT3CodeView.ts)：引入行级 `Component` 生命周期绑定、异步 `renderSeq` 竞态丢弃保护、`120ms` 流式节流与不破坏阅读回溯的底部滚动锁定。
   - [styles.css](../styles.css)、[tests/__mocks__/obsidian.ts](../tests/__mocks__/obsidian.ts)、[tests/markdown.test.ts](../tests/markdown.test.ts)、[tests/sidebar-view.test.ts](../tests/sidebar-view.test.ts)。
 - **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` 15 个测试文件 / 75 条测试全过（总覆盖率 `86.46%` Stmts / `82.63%` Branch / `89.65%` Funcs，`markdown.ts` 100% Stmts & Funcs），`main.js` 体积由 **`192,306` 字节降至 `60,192` 字节**（释放 `132,114` 字节，`144,608` 字节余量低于 `204,800` 上限）。
+
+
+---
+
+## 2026-11-28 — M1 完成：`T3Backend` 抽象、`T3Store` 与 `CliBackend` 降级适配层
+
+- **状态**：已完成 M1（UI 解耦基础设施与 CLI 降级后端适配器落地）。
+- **新增文件**：
+  - [src/t3/backend.ts](../src/t3/backend.ts)：定义统一 `T3Backend` 接口、能力矩阵契约 `BackendCapabilities`、Provider/Model/Quota/ContextUsage/RuntimeRequest 领域模型与写命令幂等入参。
+  - [src/t3/store.ts](../src/t3/store.ts)：实现仅按需缓存当前打开会话详情的不可变客户端状态容器 `T3Store`。
+  - [src/t3/cli-backend.ts](../src/t3/cli-backend.ts)：封装 `CliChat` 实现 `T3Backend`，支持预配置模型转换、轮询订阅，并对不支持的能力（中断/切模型/改权限/审批）明确报错而非静默伪装。
+  - 单元测试：[tests/store.test.ts](../tests/store.test.ts)、[tests/cli-backend.test.ts](../tests/cli-backend.test.ts)。
+- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **17 个测试文件 / 79 条测试全过**（`cli-backend.ts` 100% Stmts/Funcs、`store.ts` 97.26% Stmts）、`main.js` 为 `60,192` 字节（`< 204,800`）。
