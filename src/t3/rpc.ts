@@ -5,6 +5,26 @@ export function record(value: unknown): WireObject {
     ? value as WireObject : {};
 }
 
+function redactRpcErrorText(text: string): string {
+  return text
+    .replace(/\b(Bearer|DPoP)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
+    .replace(/([?&](?:wsTicket|token|access_token|subject_token)=)[^&\s]+/gi, '$1[REDACTED]');
+}
+
+function extractFailureMessage(exit: WireObject): string {
+  const causeObj = record(exit.cause);
+  const nodes = Array.isArray(exit.cause)
+    ? exit.cause
+    : Array.isArray(causeObj.reasons) ? causeObj.reasons : [exit.cause];
+  for (const item of nodes) {
+    const node = record(item);
+    const err = record(node.error);
+    const raw = node._tag === 'Fail' ? (err.detail ?? err.message) : undefined;
+    if (typeof raw === 'string' && raw) return redactRpcErrorText(raw);
+  }
+  return 'T3 拒绝了请求。请检查项目、Codex 配置和配对权限。';
+}
+
 interface RpcSocket extends EventTarget {
   send(data: string): void;
   close(): void;
@@ -76,7 +96,7 @@ export class T3Rpc {
       this.pending.delete(requestId);
       const exit = record(frame.exit);
       if (exit._tag === 'Success') call.resolve(exit.value);
-      else call.reject(new Error('T3 拒绝了请求。请检查项目、Codex 配置和配对权限。'));
+      else call.reject(new Error(extractFailureMessage(exit)));
     }
   }
 
@@ -108,6 +128,13 @@ export class T3Rpc {
       if (!chunk) timer = setTimeout(cancel, 15000);
     }).finally(() => clearTimeout(timer));
     return { result, cancel };
+  }
+
+  subscribe(tag: string, payload: unknown, onChunk: (value: unknown) => void): {
+    result: Promise<unknown>; unsubscribe: () => void;
+  } {
+    const { result, cancel } = this.request(tag, payload, onChunk);
+    return { result, unsubscribe: cancel };
   }
 
   close(): void {

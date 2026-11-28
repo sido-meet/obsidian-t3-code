@@ -97,3 +97,17 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - [src/t3/cli-backend.ts](../src/t3/cli-backend.ts)：封装 `CliChat` 实现 `T3Backend`，支持预配置模型转换、轮询订阅，并对不支持的能力（中断/切模型/改权限/审批）明确报错而非静默伪装。
   - 单元测试：[tests/store.test.ts](../tests/store.test.ts)、[tests/cli-backend.test.ts](../tests/cli-backend.test.ts)。
 - **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **17 个测试文件 / 79 条测试全过**（`cli-backend.ts` 100% Stmts/Funcs、`store.ts` 97.26% Stmts）、`main.js` 为 `60,192` 字节（`< 204,800`）。
+
+
+---
+
+## 2026-11-28 — M2 完成：协议 v2 服务发现、纯内存鉴权与流式 Effect-RPC 传输层
+
+- **状态**：已完成 M2（本地 Server 发现、严格 `.cmd` 鉴权、流式 RPC + `Ack` 流控与 v2 线协议规范化层落地并通过验证）。
+- **核心改动**：
+  - [src/t3/discovery.ts](../src/t3/discovery.ts)：`validateLoopbackOrigin` 严格限制本机回环地址、`isProcessAlive` PID 存活检测、`discoverCliPath` 多路径/PATH 自动发现（排除桌面 GUI 误启动）、严格 14 行 `t3.cmd` Launcher 解析与 `discoverLocalServer`（`server-runtime.json` + `/.well-known/t3/environment` 协议 v2 强校验与版本比对）。
+  - [src/t3/auth.ts](../src/t3/auth.ts)：纯内存短期会话管理器 `T3AuthManager`（`t3 auth session issue/revoke`、`shell: false` Fail-Closed `.cmd` 解析、单飞并发合并、到期前自动续期、HTTP `/api/auth/session` 权限核验与失败即吊销、`/oauth/token` 配对兑换与敏感凭据文本脱敏 `redactSensitiveText`）。
+  - [src/t3/rpc.ts](../src/t3/rpc.ts)：补齐 `subscribe()`/`unsubscribe()`、8-chunk 窗口逐帧 `Ack`、`Interrupt` 退订、`Ping`/`Pong` 心跳与 Effect `Cause` 报错脱敏提取。
+  - [src/t3/protocol-v2.ts](../src/t3/protocol-v2.ts)：Provider/Model 目录与动态 `optionDescriptors` 解析、`usageLimits` 五态诚实建模、三级 `contextUsage` 提取（turn -> transfer -> thread -> compaction）、全局递增游标归约（含 `unknown-event` 前移与 `snapshot-required` 回退信号）。
+  - 单元测试：[tests/rpc.test.ts](../tests/rpc.test.ts)、[tests/discovery.test.ts](../tests/discovery.test.ts)、[tests/auth.test.ts](../tests/auth.test.ts)、[tests/protocol-v2.test.ts](../tests/protocol-v2.test.ts)。
+- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **20 个测试文件 / 94 条测试全过**（`rpc.ts` **100%** Stmts/Branch/Funcs/Lines、`protocol-v2.ts` **96.36%** Stmts / **100%** Funcs、`discovery.ts` **91.94%** Stmts），`main.js` 为 `60,192` 字节（`< 204,800`）。

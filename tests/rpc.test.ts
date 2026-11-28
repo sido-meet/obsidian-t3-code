@@ -129,3 +129,53 @@ it('closes the connection if sending a heartbeat fails', async () => {
     await rpc.disconnected;
   } finally { vi.useRealTimers(); }
 });
+
+it('supports subscribe/unsubscribe streaming and extracts redacted Effect Cause failure messages', async () => {
+  const socket = new Socket();
+  const rpc = new T3Rpc(socket);
+  const chunks: unknown[] = [];
+
+  const sub = rpc.subscribe('server.subscribeServerConfig', {}, value => chunks.push(value));
+  socket.receive({ _tag: 'Chunk', requestId: '1', values: [{ ok: true }] });
+  expect(chunks).toEqual([{ ok: true }]);
+  expect(socket.sent).toContainEqual({ _tag: 'Ack', requestId: '1' });
+  sub.unsubscribe();
+  await expect(sub.result).rejects.toThrow('取消');
+  expect(socket.sent).toContainEqual({ _tag: 'Interrupt', requestId: '1' });
+
+  const failArrayDetail = rpc.request('cmd.a', {});
+  socket.receive({
+    _tag: 'Exit',
+    requestId: '2',
+    exit: {
+      _tag: 'Failure',
+      cause: [
+        { _tag: 'Die' },
+        { _tag: 'Fail', error: { detail: 'Auth failed Bearer top-secret-tok?wsTicket=tkt99' } },
+      ],
+    },
+  });
+  await expect(failArrayDetail.result).rejects.toThrow('Auth failed Bearer [REDACTED]?wsTicket=[REDACTED]');
+
+  const failReasonsMsg = rpc.request('cmd.b', {});
+  socket.receive({
+    _tag: 'Exit',
+    requestId: '3',
+    exit: {
+      _tag: 'Failure',
+      cause: {
+        reasons: [{ _tag: 'Fail', error: { message: 'Bad DPoP dpop123&token=abc' } }],
+      },
+    },
+  });
+  await expect(failReasonsMsg.result).rejects.toThrow('Bad DPoP [REDACTED]&token=[REDACTED]');
+
+  const failDirectObj = rpc.request('cmd.c', {});
+  socket.receive({
+    _tag: 'Exit',
+    requestId: '4',
+    exit: { _tag: 'Failure', cause: { _tag: 'Fail', error: {} } },
+  });
+  await expect(failDirectObj.result).rejects.toThrow('T3 拒绝了请求');
+  rpc.close();
+});
