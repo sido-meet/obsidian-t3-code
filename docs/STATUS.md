@@ -111,3 +111,16 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - [src/t3/protocol-v2.ts](../src/t3/protocol-v2.ts)：Provider/Model 目录与动态 `optionDescriptors` 解析、`usageLimits` 五态诚实建模、三级 `contextUsage` 提取（turn -> transfer -> thread -> compaction）、全局递增游标归约（含 `unknown-event` 前移与 `snapshot-required` 回退信号）。
   - 单元测试：[tests/rpc.test.ts](../tests/rpc.test.ts)、[tests/discovery.test.ts](../tests/discovery.test.ts)、[tests/auth.test.ts](../tests/auth.test.ts)、[tests/protocol-v2.test.ts](../tests/protocol-v2.test.ts)。
 - **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **20 个测试文件 / 94 条测试全过**（`rpc.ts` **100%** Stmts/Branch/Funcs/Lines、`protocol-v2.ts` **96.36%** Stmts / **100%** Funcs、`discovery.ts` **91.94%** Stmts），`main.js` 为 `60,192` 字节（`< 204,800`）。
+
+
+---
+
+## 2026-11-28 — M3 & M4 完成：`RpcBackend`、`T3BackendManager` 降级路由、幂等防重与 Vault 安全门卫
+
+- **状态**：已完成 M3 与 M4（WebSocket RPC 主后端、断线增量追平/HTTP bounded 回落、确定性 `commandId`/`messageId` 幂等写操作、`UncertainWriteError` 防误降级重发、自动 `CliBackend` 降级与 `realpath` Vault 安全护栏落地）。
+- **核心改动**：
+  - [src/t3/vault-guard.ts](../src/t3/vault-guard.ts)：基于 `realpath` 解析真实路径并叠加 `workspacesOverlap`，统一在 `T3BackendManager` 层前置拦截 Vault 重叠下的非 `approval-required` 发送及权限提权切换。
+  - [src/t3/rpc-backend.ts](../src/t3/rpc-backend.ts)：实现 `T3Backend` (`mode: 'rpc'`)，覆盖 `/api/auth/websocket-ticket/rpc`（含 `404` 降级）与 `401` 自动续期、`/api/orchestration/shell` 与 `orchestration.subscribeShell` / `subscribeServerConfig`、`openThread` 流式订阅及 `snapshot-required` HTTP 回落、指数退避+抖动重连与 `afterSequence` 追平；写路径实现 `thread.create` + `message.dispatch`（同 `commandId` 复用确定 `threadId`/`messageId` 并在断网抛出 `UncertainWriteError`）、`thread.stop`/`run.interrupt`、会话内切模型/权限/模式与受 `supportsFeedback` 约束的 `runtime-request.respond`。
+  - [src/t3/backend-manager.ts](../src/t3/backend-manager.ts)：实现 RPC 优先 + 连接/协议失败自动切换 `CliBackend` 降级路由器、`pairWithCode` 内存配对连接、`retryPendingDispatch` 先查后重放及禁止通过 CLI 重放未确认 RPC 写入硬不变量。
+  - 单元测试：[tests/vault-guard.test.ts](../tests/vault-guard.test.ts)（含临时目录 `junction`/`symlink` 穿透验证）、[tests/rpc-backend.test.ts](../tests/rpc-backend.test.ts)、[tests/backend-manager.test.ts](../tests/backend-manager.test.ts)。
+- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **23 个测试文件 / 103 条测试全过**（`vault-guard.ts` **100%** Stmts/Funcs/Lines、`store.ts` **100%**、`rpc.ts` **100%**），`main.js` 为 `60,192` 字节（`< 204,800`）。
