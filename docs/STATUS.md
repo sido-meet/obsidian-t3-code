@@ -55,3 +55,19 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - `npm run test:coverage`：15 个测试文件 / 71 条测试全部通过（总覆盖率 `85.96%` Stmts / `81.33%` Branch / `89.5%` Funcs；`sidebar-model.ts`、`context.ts`、`rpc.ts`、`transcript.ts`、`workspace.ts`、`markdown.ts`、`note-attachments.ts` 均 100%；`ObsidianT3CodeView.ts` `85.55%` Stmts / `88.6%` Funcs）
   - `npm run build`：`main.js` `192,341` 字节（`< 204,800` 字节上限），bundle 校验通过
 - **待办**：等待用户审阅分支改动并决定是否发起/合并 PR。
+
+
+---
+
+## 2026-11-28 — RPC First + CLI Fallback 第一至第三阶段调研与 ADR-0003 设计（待审阅）
+
+- **状态**：已完成源码/生态调研、本机运行中 T3 Code 服务端最小可行性实验（MVE）及架构设计文档输出；**代码层暂未开始大规模重构，等待用户审阅实施计划**。
+- **调研与实测关键结论**：
+  - **本机环境**：`t3` CLI 与本地 Server 均为 `0.1.13-nightly.20261125.5258`，协议版本 `orchestrationProtocolVersion = 2`（`databaseMigration = 119`，`85` 项服务端能力标志）。
+  - **协议与包复用评估**：`pingdotgg/t3code`（commit `70e4319d`）全部 `@t3tools/*` 内部包均为 `private: true` 且耦合 `effect@4.1.3`（`packages/shared` 含原生 `ffi-rs`）；结合当前 `main.js` 已达 `192,306 / 204,800` 字节（`markdown-it + highlight.js` 占 `136,501` 字节），确立采用**零 `effect` 轻量原生 TypeScript Effect-RPC JSON 客户端**。
+  - **本机 MVE 实测通过项目**：回环发现（`server-runtime.json` + `/.well-known/t3/environment`）、短期 Scope Session 签发与吊销（`t3 auth session issue/revoke`，零残留）、`wsTicket` 升级 `/ws?orchestrationProtocol=2`、`Ack` 8-chunk 窗口控制、`server.getConfig`（实测返回 `10` 个 Provider，其中 `codex`/`claudeAgent`/`antigravity` 3 个就绪，且识别出 `codex`/`claudeAgent` 思考度无 `role` 字段与部分 Provider `usageLimits` 为 `unsupported`/`null`）、`shell`/`bounded`（数据在 `.projection` 内）与 `tokenUsage`/`contextUsage`、同 `commandId` 幂等重放、`thread.stop` 中断、`runtime-request.respond` 审批拒绝（确认 `feedback` 约束）及双客户端跨端同步与 `afterSequence` 增量重连恢复。
+- **产出文档**：
+  - 新增架构决策记录：[docs/adr/0003-rpc-first-cli-fallback.md](adr/0003-rpc-first-cli-fallback.md)（状态：`Proposed`）
+  - 更新索引：[docs/adr/README.md](adr/README.md)
+  - 新增分阶段实施计划：[docs/superpowers/plans/2026-11-28-rpc-first-cli-fallback-plan.md](superpowers/plans/2026-11-28-rpc-first-cli-fallback-plan.md)
+- **待用户确认**：M0 两项前置决策（`main.js` 体积余量方案 & 默认鉴权接入优先级）及各阶段改造范围确认后进入实施。
