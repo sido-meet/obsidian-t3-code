@@ -8,7 +8,8 @@ export function record(value: unknown): WireObject {
 function redactRpcErrorText(text: string): string {
   return text
     .replace(/\b(Bearer|DPoP)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
-    .replace(/([?&](?:wsTicket|token|access_token|subject_token)=)[^&\s]+/gi, '$1[REDACTED]');
+    .replace(/([?&](?:wsTicket|token|access_token|subject_token|code)=)[^&\s#]+/gi, '$1[REDACTED]')
+    .replace(/("(?:token|access_token|subject_token|ticket|secret)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2');
 }
 
 function extractFailureMessage(exit: WireObject): string {

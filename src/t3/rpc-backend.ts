@@ -125,6 +125,7 @@ export class RpcBackend implements T3Backend {
   private workspacePath = '';
   private requestedProjectId = '';
   private resolvedProjectId = '';
+  private resolvedProjectWorkspaceRoot?: string;
   private shellSequence = 0;
   private shellLoaded = false;
   private shellProjects: Array<{ id: string; title: string; workspaceRoot: string }> = [];
@@ -292,21 +293,29 @@ export class RpcBackend implements T3Backend {
   private async resolveEffectiveProjectId(): Promise<void> {
     if (this.requestedProjectId) {
       this.resolvedProjectId = this.requestedProjectId;
+      this.resolvedProjectWorkspaceRoot = this.shellProjects.find(p => p.id === this.requestedProjectId)?.workspaceRoot;
       return;
     }
     const target = await this.normalizeFsPath(this.workspacePath);
     if (!target) {
       this.resolvedProjectId = '';
+      this.resolvedProjectWorkspaceRoot = undefined;
       return;
     }
     for (const proj of this.shellProjects) {
       const root = await this.normalizeFsPath(proj.workspaceRoot);
       if (root === target) {
         this.resolvedProjectId = proj.id;
+        this.resolvedProjectWorkspaceRoot = proj.workspaceRoot;
         return;
       }
     }
     this.resolvedProjectId = '';
+    this.resolvedProjectWorkspaceRoot = undefined;
+  }
+
+  getResolvedProjectWorkspaceRoot(): string | undefined {
+    return this.resolvedProjectWorkspaceRoot;
   }
 
   private filteredThreads(projectIdOverride?: string): CliThread[] {
@@ -645,17 +654,26 @@ export class RpcBackend implements T3Backend {
     return this.pendingCreateThreads.get(commandId);
   }
 
-  async hasMessageOnServer(threadId: string, messageId: string): Promise<boolean> {
+  async inspectPendingWrite(
+    threadId: string,
+    messageId: string,
+  ): Promise<'committed' | 'thread-only' | 'missing' | 'unknown'> {
     try {
-      const raw = await this.httpJson(
+      const res = await this.httpRequest(
         `/api/orchestration/threads/${encodeURIComponent(threadId)}/bounded?compactTurnItems=1&deferWork=1`,
         { isOrchestration: true },
       );
-      const parsed = parseThreadSnapshot(raw, threadId);
-      return parsed.detail.messages.some(m => m.id === messageId);
+      if (res.status === 404) return 'missing';
+      if (!res.ok) return 'unknown';
+      const parsed = parseThreadSnapshot(await res.json(), threadId);
+      return parsed.detail.messages.some(m => m.id === messageId) ? 'committed' : 'thread-only';
     } catch {
-      return false;
+      return 'unknown';
     }
+  }
+
+  async hasMessageOnServer(threadId: string, messageId: string): Promise<boolean> {
+    return (await this.inspectPendingWrite(threadId, messageId)) === 'committed';
   }
 
   private async dispatchCommand(command: Record<string, unknown>, markUncertainOnTransportError = false): Promise<{ sequence?: number }> {
@@ -667,13 +685,12 @@ export class RpcBackend implements T3Backend {
       const res = record(await this.rpc.request('orchestration.dispatchCommand', command).result);
       return typeof res.sequence === 'number' ? { sequence: res.sequence } : {};
     } catch (error) {
+      const cleanMsg = redactSensitiveText(error instanceof Error ? error.message : 'T3 指令执行失败。');
+      if (error instanceof Error) error.message = cleanMsg;
       if (markUncertainOnTransportError && isTransportFailure(error)) {
-        throw new UncertainWriteError(
-          redactSensitiveText(error instanceof Error ? error.message : '发送状态未知，请勿自动重发。'),
-          { cause: error },
-        );
+        throw new UncertainWriteError(cleanMsg || '发送状态未知，请勿自动重发。', { cause: error });
       }
-      throw new Error(redactSensitiveText(error instanceof Error ? error.message : 'T3 指令执行失败。'), { cause: error });
+      throw new Error(cleanMsg, { cause: error });
     }
   }
 

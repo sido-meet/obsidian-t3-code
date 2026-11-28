@@ -1,7 +1,7 @@
 # ADR-0003: RPC First + CLI Fallback 混合后端架构与统一状态层设计
 
 ## 状态 (Status)
-**Accepted**（用户已确认采用 ADR-0003 架构：M0 迁移至原生 `MarkdownRenderer.render()` 保留 200 KiB 打包约束；默认桌面端通过自动发现 T3 CLI 签发受限短期 Session，保留手动配对备选；按 M0 → M6 计划推进实施）
+**Implemented (M0–M6 Verified on `feat/sidebar-v2-redesign`)**（已完成 M0–M6 全阶段实施与验证：M0 迁移至原生 `MarkdownRenderer.render()` 后 `main.js` 降至 `60,192` 字节，M1–M6 完成后终版 `main.js` 为 `141,443` 字节，远低于 `204,800` 字节门禁上限；桌面端自动发现 T3 CLI 签发纯内存短期 Session 并支持纯内存配对备选；已通过独立 Code Review、`23` 文件 / `112` 测试套件及本机 `0.1.13-nightly.20261125.5258` 服务端全链路 E2E 验证）
 
 ## 日期
 2026-11-28
@@ -315,7 +315,7 @@ export interface T3Backend {
    - 调用 `GET /.well-known/t3/environment` 验证 `orchestrationProtocolVersion === 2` 与非空 `environmentId`，缓存 `ExecutionEnvironmentDescriptor.capabilities`。
 2. **Scoped Bearer 鉴权（`src/t3/auth.ts`）**：
    - 桌面本机优先复用 `t3.cmd` 14 行模板严格校验解析器（借鉴 `t3-obsidian` `desktop-cli.ts`），无 Shell 注入地执行 `t3 auth session issue --ttl 30m --scope orchestration:read --scope orchestration:operate --label t3-codian --json` 获取内存短期凭据，在插件卸载/重配时执行 `t3 auth session revoke <sessionId>`。
-   - 同步支持通过配对码兑换 `/oauth/token` 并将会话凭据安全保存于设备本地 `localStorage`（绝不写入同步 `data.json` 或知识库目录）。
+   - 同步支持通过一次性配对码兑换 `/oauth/token` 并将会话凭据**仅保存在插件进程内存中**（`T3AuthManager`；绝不写入 `localStorage`、`data.json`、日志或知识库目录）。
    - 所有诊断日志与错误对象必须经过键值/正则脱敏，严禁泄露 Token、`wsTicket`、Authorization 头或笔记正文。
 3. **自动降级与恢复（`T3BackendManager`）**：
    - 优先连接 `RpcBackend`；当未发现本地运行 Server、协议非 v2、CLI 签发与配对凭据均不可用、或建连失败时，自动降级至 `CliBackend`（`connectionPhase = 'fallback-cli'`），在异常横幅或权限/用量弹窗内用非侵入文案说明当前运行在 CLI 降级模式并提供一键重试 RPC 连接。

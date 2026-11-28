@@ -1160,4 +1160,135 @@ describe('ObsidianT3CodeView V2 UI', () => {
 
     await view.onClose();
   });
+
+  it('recovers uncertain dispatch across fallback-cli retry without deadlocking, keeps approval feedback DOM across streams, releases store detail on switch/close, and survives early tab close during check()', async () => {
+    const store = new T3Store();
+    const rpcCaps: BackendCapabilities = {
+      mode: 'rpc',
+      supportsLiveCatalog: true,
+      supportsProviderRefresh: false,
+      supportsStreaming: true,
+      supportsStop: true,
+      supportsMidThreadModelSwitch: true,
+      supportsRuntimeModeSwitch: true,
+      supportsInteractionModeSwitch: true,
+      supportsApprovals: true,
+      supportsContextUsage: true,
+      supportsQuotaUsage: true,
+    };
+    let rpcReachable = true;
+    let shouldDropSend = true;
+    let detailListener: ((ev: BackendEvent) => void) | undefined;
+    const threadA = makeThread({ threadId: 'th-a', title: 'Thread A', runtimeMode: 'approval-required', status: 'waiting', pendingRequestCount: 1 });
+
+    const fakeRpc = {
+      mode: 'rpc',
+      connect: vi.fn(async () => {
+        if (!rpcReachable) throw new Error('offline');
+        return rpcCaps;
+      }),
+      disconnect: vi.fn(async () => undefined),
+      getProviders: vi.fn(async () => []),
+      listThreads: vi.fn(async () => [threadA]),
+      openThread: vi.fn(async (id: string, cb: (ev: BackendEvent) => void) => {
+        detailListener = cb;
+        const det: ThreadDetail = {
+          thread: threadA,
+          messages: [{ id: 'm1', role: 'assistant', text: 'Need approval', streaming: true }],
+          turnItems: [],
+          runtimeRequests: [{ id: 'req-fb', threadId: id, kind: 'command', status: 'pending', command: 'echo 1', supportsFeedback: true }],
+          contextUsage: { status: 'unknown' },
+          runIds: [],
+          lastSequence: 1,
+          synchronized: true,
+        };
+        store.setThreadDetail(id, det);
+        cb({ type: 'thread.detail', detail: det });
+        return { unsubscribe: () => undefined };
+      }),
+      sendMessage: vi.fn(async () => {
+        if (shouldDropSend) {
+          shouldDropSend = false;
+          throw new UncertainWriteError('dropped mid-send');
+        }
+        return { threadId: 'th-a' };
+      }),
+      inspectPendingWrite: vi.fn(async () => 'committed' as const),
+      hasMessageOnServer: vi.fn(async () => true),
+      getPendingThreadIdForCommand: vi.fn(() => undefined),
+    } as unknown as RpcBackend;
+
+    const { view, root } = setupView(
+      { projectPath: vaultDir, backendPreference: 'auto' },
+      p => new T3BackendManager({ getSettings: () => p.settings, store, rpcBackend: fakeRpc }),
+    );
+    await view.onOpen();
+    await waitReady(view);
+
+    // Early tab close while check() is pending must NOT prevent view ready state
+    let resolveDelayedConnect: (() => void) | undefined;
+    (fakeRpc.connect as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      () => new Promise<BackendCapabilities>(r => { resolveDelayedConnect = () => r(rpcCaps); }),
+    );
+    const recheckPromise = (view as unknown as { check: () => Promise<void> }).check();
+    root.querySelector('[aria-label="新开标签页"]')!.click();
+    await flush();
+    root.querySelector('.t3c-tab-badge-select')!.click();
+    await flush();
+    root.querySelector('.t3c-tab-badge-close')!.click();
+    resolveDelayedConnect?.();
+    await recheckPromise;
+    expect((view as unknown as { ready: boolean }).ready).toBe(true);
+
+    // Verify feedback input node identity survives unrelated streaming updates
+    await (view as unknown as { switchThread: (t?: CliThread) => Promise<void> }).switchThread(threadA);
+    await flush();
+    const feedbackInput = root.querySelector('.t3c-approval-feedback')!;
+    expect(feedbackInput).not.toBeNull();
+    detailListener?.({
+      type: 'thread.detail',
+      detail: {
+        ...store.getSnapshot().activeThreadDetails.get('th-a')!,
+        messages: [{ id: 'm1', role: 'assistant', text: 'Need approval updated text', streaming: true }],
+      },
+    });
+    await flush();
+    expect(root.querySelector('.t3c-approval-feedback')).toBe(feedbackInput);
+
+    // Send on idle state throws UncertainWriteError, then simulates CLI fallback -> Banner Retry stays visible and recovers RPC
+    detailListener?.({
+      type: 'thread.detail',
+      detail: { ...store.getSnapshot().activeThreadDetails.get('th-a')!, thread: { ...threadA, status: 'idle', pendingRequestCount: 0 }, runtimeRequests: [] },
+    });
+    await flush();
+    const draft = root.querySelector('.t3c-textarea')!;
+    draft.value = 'Uncertain message';
+    draft.dispatchEvent(new FakeEvent('input'));
+    root.querySelector('.t3c-send-btn')!.click();
+    await waitUntil(() => root.querySelector('.t3c-banner')?.hidden === false);
+
+    // Force manager to fallback-cli, click Retry while still unreachable -> Retry button remains visible (not deadlocked)
+    rpcReachable = false;
+    cliMocks.listThreads.mockResolvedValue([threadA]);
+    const manager = (view as unknown as { backendManager: T3BackendManager }).backendManager;
+    await manager.retryRpc();
+    await flush();
+    const retryBtn = root.querySelector('.t3c-banner-actions')!.querySelector('button')!;
+    expect(retryBtn.hidden).toBe(false);
+    retryBtn.click();
+    await flush();
+    expect(root.querySelector('.t3c-banner-actions')!.querySelector('button')!.hidden).toBe(false);
+
+    // Bring RPC back -> clicking Retry upgrades to RPC & deduplicates pending dispatch cleanly
+    rpcReachable = true;
+    root.querySelector('.t3c-banner-actions')!.querySelector('button')!.click();
+    await waitUntil(() => draft.value === '');
+
+    // Switching back to new thread releases unused activeThreadDetail from store
+    expect(store.getSnapshot().activeThreadDetails.has('th-a')).toBe(true);
+    await (view as unknown as { switchThread: (t?: CliThread) => Promise<void> }).switchThread(undefined);
+    expect(store.getSnapshot().activeThreadDetails.has('th-a')).toBe(false);
+
+    await view.onClose();
+  });
 });

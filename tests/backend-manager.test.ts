@@ -215,8 +215,116 @@ describe('T3BackendManager', () => {
       .rejects.toBeInstanceOf(UncertainWriteError);
     serverAlreadyHasMessage = false;
     shouldDrop = false;
+    const rpcSendSpy = rpcBackend.sendMessage as ReturnType<typeof vi.fn>;
     const replayed = await mgr.retryPendingDispatch('id-11');
     expect(replayed).toEqual({ threadId: 'th-created', deduplicated: false });
+    expect(rpcSendSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      commandId: 'id-11',
+      messageId: 'id-12',
+      threadId: 'th-created',
+      runtimeMode: 'approval-required',
+    }));
+  });
+
+  it('prevents runtimeMode shadowing, handles missing 404 thread retry, blocks TOCTOU CLI replay, and rejects mismatched Vault projectId', async () => {
+    const store = new T3Store();
+    const rpcSend = vi.fn(async (input: { threadId?: string }) => ({ threadId: input.threadId ?? 'th-recreated' }));
+    let inspectStatus: 'committed' | 'thread-only' | 'missing' | 'unknown' = 'missing';
+    let flipToCliDuringInspect = false;
+    let idSeq = 0;
+
+    const mgrHolder: { mgr?: T3BackendManager } = {};
+    const rpcBackend = {
+      mode: 'rpc',
+      connect: vi.fn(async () => ({ ...CLI_BACKEND_CAPABILITIES, mode: 'rpc' as const })),
+      disconnect: vi.fn(async () => undefined),
+      getProviders: vi.fn(async () => []),
+      listThreads: vi.fn(async () => [{ threadId: 'th-full', title: 'Full', status: 'idle', runtimeMode: 'full-access' }]),
+      openThread: vi.fn(async () => ({ unsubscribe: () => undefined })),
+      sendMessage: rpcSend,
+      inspectPendingWrite: vi.fn(async () => {
+        if (flipToCliDuringInspect && mgrHolder.mgr) {
+          (mgrHolder.mgr as unknown as { activeBackend: unknown }).activeBackend = cliBackend;
+        }
+        return inspectStatus;
+      }),
+      getPendingThreadIdForCommand: vi.fn(() => 'th-lost'),
+      getResolvedProjectWorkspaceRoot: vi.fn(() => 'E:\\RealVault'),
+    } as unknown as RpcBackend;
+
+    const cliBackend = {
+      mode: 'cli',
+      connect: vi.fn(async () => ({ ...CLI_BACKEND_CAPABILITIES })),
+      disconnect: vi.fn(async () => undefined),
+      getProviders: vi.fn(async () => []),
+      listThreads: vi.fn(async () => []),
+      sendMessage: vi.fn(async () => ({ threadId: 'th-cli' })),
+      setRuntimeMode: vi.fn(async () => { throw new Error('CLI 不支持'); }),
+    } as unknown as CliBackend;
+
+    let settings = makeSettings();
+    const mgrRef = new T3BackendManager({
+      getSettings: () => settings,
+      store,
+      rpcBackend,
+      cliBackend,
+      randomId: () => `m-${++idSeq}`,
+    });
+    mgrHolder.mgr = mgrRef;
+
+    // Mismatched projectPath outside Vault + projectId pointing inside Vault falls back fail-closed instead of bypassing Vault
+    await mgrRef.connect('E:\\RealVault', 'E:\\Outside', 'proj-vault-id');
+    expect(rpcBackend.disconnect).toHaveBeenCalled();
+    expect(mgrRef.activeMode).toBe('cli');
+    expect(store.getSnapshot().connectionError).toContain('不一致');
+
+    // Valid Vault connection: existing full-access thread CANNOT be shadowed by passing runtimeMode: 'approval-required'
+    (rpcBackend.getResolvedProjectWorkspaceRoot as ReturnType<typeof vi.fn>).mockReturnValue('E:\\RealVault');
+    await mgrRef.connect('E:\\RealVault', 'E:\\RealVault', 'proj-vault-id');
+    await expect(mgrRef.sendMessage({
+      projectId: 'proj-vault-id',
+      threadId: 'th-full',
+      runtimeMode: 'approval-required',
+      text: 'bypass attempt',
+    })).rejects.toThrow('approval-required');
+    expect(rpcSend).not.toHaveBeenCalled();
+
+    // Brand-new Vault thread hitting UncertainWriteError retains approval-required and clears threadId on 404 'missing' retry
+    rpcSend.mockRejectedValueOnce(new UncertainWriteError('dropped during thread.create'));
+    await expect(mgrRef.sendMessage({
+      projectId: 'proj-vault-id',
+      runtimeMode: 'approval-required',
+      text: 'retry new vault thread',
+    })).rejects.toBeInstanceOf(UncertainWriteError);
+
+    inspectStatus = 'missing';
+    const recreated = await mgrRef.retryPendingDispatch('m-3');
+    expect(recreated).toEqual({ threadId: 'th-recreated', deduplicated: false });
+    expect(rpcSend).toHaveBeenLastCalledWith(expect.objectContaining({
+      commandId: 'm-3',
+      messageId: 'm-4',
+      threadId: undefined,
+      runtimeMode: 'approval-required',
+    }));
+
+    // TOCTOU race: if backend falls back to CLI while inspectPendingWrite is in flight, replay is aborted
+    rpcSend.mockRejectedValueOnce(new UncertainWriteError('dropped mid-flight'));
+    await expect(mgrRef.sendMessage({
+      projectId: 'proj-vault-id',
+      runtimeMode: 'approval-required',
+      text: 'toctou guard',
+    })).rejects.toBeInstanceOf(UncertainWriteError);
+    inspectStatus = 'thread-only';
+    flipToCliDuringInspect = true;
+    await expect(mgrRef.retryPendingDispatch('m-5')).rejects.toThrow('RPC 连接已断开');
+    expect(cliBackend.sendMessage).not.toHaveBeenCalled();
+
+    // Verify both-backends-fail -> 'disconnected' and setRuntimeMode delegation in CLI mode
+    settings = makeSettings({ backendPreference: 'cli' });
+    (cliBackend.connect as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('cli missing'));
+    await expect(mgrRef.connect('E:\\RealVault', 'E:\\RealVault', 'p')).rejects.toThrow('cli missing');
+    expect(store.getSnapshot().connectionPhase).toBe('disconnected');
+    await expect(mgrRef.setRuntimeMode('th-1', 'approval-required')).rejects.toThrow('CLI 不支持');
   });
 
   it('pairs via memory-only OAuth token exchange and disposes sessions cleanly', async () => {

@@ -432,6 +432,15 @@ export function parseThreadSnapshot(raw: unknown, fallbackThreadId?: string): {
   };
 }
 
+function isQueuedProviderThreadPlaceholder(raw: Record<string, unknown>): boolean {
+  return (
+    raw.status === 'not_loaded'
+    && raw.firstRunOrdinal === null
+    && raw.nativeThreadRef === null
+    && raw.providerSessionId === null
+  );
+}
+
 function upsertById<T extends { id: string }>(list: readonly T[], item: T): T[] {
   const idx = list.findIndex(existing => existing.id === item.id);
   if (idx < 0) return [...list, item];
@@ -546,23 +555,40 @@ export function reduceThreadStreamItem(
     };
   } else if (evType === 'provider-turn.updated') {
     const id = str(payload.id);
-    const existing = Array.isArray(acc.rawProjection.providerTurns) ? acc.rawProjection.providerTurns : [];
-    const nextTurns = id ? upsertById(existing.map(t => record(t)) as Array<{ id: string }>, payload as { id: string }) : [...existing, payload];
+    const existingTurns = (Array.isArray(acc.rawProjection.providerTurns) ? acc.rawProjection.providerTurns : [])
+      .map(t => record(t));
+    const prevTurn = id ? existingTurns.find(t => str(t.id) === id) : undefined;
+    const mergedPayload = payload.tokenUsage === undefined && prevTurn?.tokenUsage !== undefined
+      ? { ...payload, tokenUsage: prevTurn.tokenUsage }
+      : payload;
+    const nextTurns = id
+      ? upsertById(existingTurns as Array<{ id: string }>, mergedPayload as { id: string })
+      : [...existingTurns, mergedPayload];
     acc.rawProjection = { ...acc.rawProjection, providerTurns: nextTurns };
     nextDetail = { ...nextDetail, contextUsage: extractContextUsage(acc.rawProjection) };
   } else if (evType === 'provider-thread.updated') {
     const id = str(payload.id);
     const existing = Array.isArray(acc.rawProjection.providerThreads) ? acc.rawProjection.providerThreads : [];
     const nextPts = id ? upsertById(existing.map(t => record(t)) as Array<{ id: string }>, payload as { id: string }) : [...existing, payload];
-    acc.rawProjection = { ...acc.rawProjection, providerThreads: nextPts };
+    const nextThread = id && str(payload.appThreadId) === nextDetail.thread.threadId && !isQueuedProviderThreadPlaceholder(payload)
+      ? { ...record(acc.rawProjection.thread), activeProviderThreadId: id }
+      : acc.rawProjection.thread;
+    acc.rawProjection = {
+      ...acc.rawProjection,
+      ...(nextThread ? { thread: nextThread } : {}),
+      providerThreads: nextPts,
+    };
     nextDetail = { ...nextDetail, contextUsage: extractContextUsage(acc.rawProjection) };
   } else if (evType.startsWith('thread.')) {
-    const updated = parseV2Thread(payload);
+    const prevRawThread = record(acc.rawProjection.thread);
+    const mergedRawThread = { ...prevRawThread, ...payload };
+    const updated = parseV2Thread(mergedRawThread);
     if (updated) {
-      acc.rawProjection = { ...acc.rawProjection, thread: payload };
+      acc.rawProjection = { ...acc.rawProjection, thread: mergedRawThread };
       nextDetail = {
         ...nextDetail,
         thread: {
+          ...nextDetail.thread,
           ...updated,
           pendingRequestCount: nextDetail.runtimeRequests.filter(r => r.status === 'pending').length,
         },

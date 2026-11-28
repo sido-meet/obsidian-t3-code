@@ -1,6 +1,7 @@
 import {
   CLI_BACKEND_CAPABILITIES,
   type BackendCapabilities,
+  type BackendModelSelection,
   type ConnectionPhase,
   type ProviderDescriptor,
   type ThreadDetail,
@@ -11,8 +12,12 @@ export interface PendingDispatch {
   commandId: string;
   messageId: string;
   threadId?: string;
+  createdNewThread?: boolean;
   projectId: string;
   text: string;
+  runtimeMode?: string;
+  modelSelection?: BackendModelSelection;
+  interactionMode?: 'default' | 'plan';
   status: 'sending' | 'uncertain';
   createdAt: number;
 }

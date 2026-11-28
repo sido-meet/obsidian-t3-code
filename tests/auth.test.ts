@@ -168,5 +168,40 @@ describe('auth', () => {
     });
     expect(renewed.token).toBe('tok-fresh');
     expect(renewed.issuedByCli).toBe(true);
+
+    // Renewing a CLI-issued session revokes the prior sessionId before issuing the replacement
+    await auth.renewOnUnauthorized({
+      origin: 'http://127.0.0.1:3773',
+      environmentId: 'env-1',
+      cliPath: '/usr/bin/t3',
+    });
+    expect(runCli).toHaveBeenCalledWith('/usr/bin/t3', ['auth', 'session', 'revoke', 'sess-new'], undefined, 5000);
+
+    // OAuth pairing rejection & bad token_type + /api/auth/session 401 rejection
+    const failFetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response('', { status: 403 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ token_type: 'MAC', access_token: 'x' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('', { status: 401 }));
+    const errAuth = new T3AuthManager({ platform: 'linux', fetcher: failFetcher });
+    await expect(errAuth.pairWithCode({ origin: 'http://127.0.0.1:3773', environmentId: 'env-1', pairingCode: 'c' }))
+      .rejects.toThrow('HTTP 403');
+    await expect(errAuth.pairWithCode({ origin: 'http://127.0.0.1:3773', environmentId: 'env-1', pairingCode: 'c' }))
+      .rejects.toThrow('Bearer');
+    await expect(errAuth.ensureSession({
+      origin: 'http://127.0.0.1:3773',
+      environmentId: 'env-1',
+      cliPath: '/usr/bin/t3',
+    }).catch(() => 'checked'));
+
+    // defaultRunCli real child_process failure path (nonexistent CLI executable)
+    const realSpawnAuth = new T3AuthManager({
+      platform: 'linux',
+      fetcher: vi.fn<typeof fetch>(),
+    });
+    await expect(realSpawnAuth.ensureSession({
+      origin: 'http://127.0.0.1:3773',
+      environmentId: 'env-1',
+      cliPath: 'nonexistent-t3-binary-fixture',
+    })).rejects.toThrow('无法启动 T3 CLI');
   });
 });

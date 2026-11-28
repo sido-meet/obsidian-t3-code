@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
 import { Component, FileSystemAdapter, FuzzySuggestModal, ItemView, MarkdownView, Notice, setIcon } from 'obsidian';
@@ -749,6 +750,12 @@ export default class ObsidianT3CodeView extends ItemView {
     this.activateTab(tab.id);
   }
 
+  private releaseTabThreadDetail(threadId?: string): void {
+    if (!threadId) return;
+    if (this.tabs.some(t => t.threadId === threadId)) return;
+    this.backendManager?.store.removeThreadDetail(threadId);
+  }
+
   private closeTab(tabId: string): void {
     if (this.tabs.length <= 1) return;
     const index = this.tabs.findIndex(t => t.id === tabId);
@@ -756,6 +763,7 @@ export default class ObsidianT3CodeView extends ItemView {
     const [removed] = this.tabs.splice(index, 1);
     removed.selectionRevision++;
     this.abortTab(removed);
+    this.releaseTabThreadDetail(removed.threadId);
     if (this.activeTabId === tabId) {
       const next = this.tabs[Math.min(index, this.tabs.length - 1)];
       this.activateTab(next.id);
@@ -953,8 +961,10 @@ export default class ObsidianT3CodeView extends ItemView {
     tab.unread = false;
     tab.runStartedAt = undefined;
     tab.lastElapsedMs = undefined;
+    const prevThreadId = tab.threadId;
     tab.thread = thread;
     tab.threadId = thread?.threadId;
+    this.releaseTabThreadDetail(prevThreadId);
     tab.draft = keepDraft ? currentDraft : '';
     tab.notes = keepDraft ? currentNotes : [];
     tab.messages = [];
@@ -1011,8 +1021,11 @@ export default class ObsidianT3CodeView extends ItemView {
   }
 
   private async applyModelSelection(tab: SidebarTab, nextSel: ModelSelection, nextExtra: Record<string, string | boolean>, focusKey: string): Promise<void> {
+    const rev = this.backendRevision;
+    const selectionRevision = tab.selectionRevision;
     if (tab.threadId) {
       await this.ensureManager().setModelSelection(tab.threadId, this.toBackendModelSelection(nextSel, nextExtra));
+      if (this.isStaleTab(tab, rev, selectionRevision)) return;
       if (tab.thread) {
         tab.thread = { ...tab.thread, providerInstanceId: nextSel.provider, model: nextSel.model };
       }
@@ -1256,9 +1269,12 @@ export default class ObsidianT3CodeView extends ItemView {
       const isCurrent = mode.id === currentMode;
 
       if (canSwitch) {
+        const rev = this.backendRevision;
+        const selectionRevision = tab.selectionRevision;
         const btn = this.button(panel, '', async () => {
           if (!tab.threadId) return;
           await this.ensureManager().setRuntimeMode(tab.threadId, mode.id);
+          if (this.isStaleTab(tab, rev, selectionRevision)) return;
           if (tab.thread) tab.thread = { ...tab.thread, runtimeMode: mode.id };
           this.renderPermPopover();
           this.refreshControls();
@@ -1342,12 +1358,12 @@ export default class ObsidianT3CodeView extends ItemView {
 
     try {
       const { vaultPath } = await this.resolveWorkspacePaths();
-      if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      if (!this.visible || rev !== this.backendRevision) return;
       if (this.plugin.settings.backendPreference === 'cli' && !/^[a-z0-9][a-z0-9._:-]*$/i.test(this.plugin.settings.projectId)) {
         throw new Error('请在插件设置绑定当前目录在 T3 Code 中登记的项目 ID。');
       }
       await manager.connect(vaultPath, this.plugin.settings.projectPath, this.plugin.settings.projectId);
-      if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      if (!this.visible || rev !== this.backendRevision) return;
       if (manager.activeMode === 'cli') {
         this.validateCliProjectBinding(this.plugin.settings.projectId);
       }
@@ -1357,30 +1373,42 @@ export default class ObsidianT3CodeView extends ItemView {
       this.cachedThreads = manager.store.getSnapshot().threads;
       this.threadsLoaded = true;
       this.renderSessionLists();
-      if (tab.threadId) {
+      if (!this.isStaleTab(tab, rev, selectionRevision) && tab.threadId) {
         await this.attachThreadStream(tab, tab.threadId, rev, selectionRevision);
       }
     } catch (error) {
-      if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      if (!this.visible || rev !== this.backendRevision) return;
       this.workspaceValidated = false;
       this.ready = false;
       this.actionError = redactSensitiveText(error instanceof Error ? error.message : '无法检查 T3 连接。');
     } finally {
       if (rev === this.backendRevision) {
         tab.checking = false;
-        if (this.visible && this.tabs.includes(tab)) this.refreshControls();
+        if (this.visible) this.refreshControls();
       }
     }
   }
 
   private async retryFromBanner(): Promise<void> {
     const tab = this.activeTab;
+    const rev = this.backendRevision;
+    const selectionRevision = tab.selectionRevision;
     if (tab.uncertainCommandId) {
       const cmdId = tab.uncertainCommandId;
+      const manager = this.ensureManager();
       tab.checking = true;
       this.refreshControls();
       try {
-        const res = await this.ensureManager().retryPendingDispatch(cmdId);
+        if (manager.activeMode !== 'rpc' && this.plugin.settings.backendPreference !== 'cli') {
+          await manager.retryRpc();
+        }
+        if (this.isStaleTab(tab, rev, selectionRevision)) return;
+        if (manager.activeMode !== 'rpc') {
+          this.actionError = undefined;
+          return;
+        }
+        const res = await manager.retryPendingDispatch(cmdId);
+        if (this.isStaleTab(tab, rev, selectionRevision)) return;
         tab.uncertainCommandId = undefined;
         tab.threadId = res.threadId;
         if (tab.draft.trim()) {
@@ -1389,11 +1417,13 @@ export default class ObsidianT3CodeView extends ItemView {
         }
         tab.notes = [];
         this.actionError = undefined;
-        await this.attachThreadStream(tab, res.threadId, this.backendRevision, tab.selectionRevision);
-        void this.ensureManager().refreshThreads();
+        await this.attachThreadStream(tab, res.threadId, rev, selectionRevision);
+        void manager.refreshThreads().catch(() => undefined);
       } finally {
-        tab.checking = false;
-        this.refreshControls();
+        if (rev === this.backendRevision) {
+          tab.checking = false;
+          if (this.visible && this.tabs.includes(tab)) this.refreshControls();
+        }
       }
       return;
     }
@@ -1467,6 +1497,7 @@ export default class ObsidianT3CodeView extends ItemView {
     } : undefined);
 
     const manager = this.ensureManager();
+    const commandId = randomUUID();
     try {
       await this.resolveWorkspacePaths();
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
@@ -1485,6 +1516,7 @@ export default class ObsidianT3CodeView extends ItemView {
         ? tab.thread?.runtimeMode
         : (this.vaultOverlapCache?.overlaps ? 'approval-required' : undefined);
       const result = await manager.sendMessage({
+        commandId,
         projectId: this.plugin.settings.projectId,
         threadId: tab.threadId,
         text: composeAttachments(prompt, attachmentText),
@@ -1508,15 +1540,14 @@ export default class ObsidianT3CodeView extends ItemView {
       if (isNewThread || !tab.threadSub) {
         await this.attachThreadStream(tab, result.threadId, rev, selectionRevision);
       }
-      void manager.refreshThreads();
+      void manager.refreshThreads().catch(() => undefined);
     } catch (error) {
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
       tab.busy = false;
       tab.runStartedAt = undefined;
       if (error instanceof UncertainWriteError) {
-        const latestPending = Array.from(manager.store.getSnapshot().pendingDispatches.values()).at(-1);
-        tab.uncertainCommandId = latestPending?.commandId;
-        this.actionError = redactSensitiveText(error.message);
+        tab.uncertainCommandId = commandId;
+        this.actionError = undefined;
       } else {
         if (manager.activeMode === 'cli') this.ready = false;
         this.actionError = redactSensitiveText(error instanceof Error ? error.message : 'T3 请求失败。');
@@ -1546,12 +1577,24 @@ export default class ObsidianT3CodeView extends ItemView {
   }
 
   private renderApprovalCards(tab: SidebarTab): void {
-    this.approvalAreaEl.empty();
     const caps = this.storeState.capabilities;
     const pending = caps.supportsApprovals
       ? tab.runtimeRequests.filter(req => req.status === 'pending')
       : [];
-    this.approvalAreaEl.hidden = pending.length === 0;
+    const sig = pending.map(r => `${r.id}:${r.status}:${r.command ?? ''}:${r.title ?? ''}:${r.supportsFeedback}`).join('|');
+    if (pending.length === 0) {
+      this.approvalAreaEl.removeAttribute('data-sig');
+      this.approvalAreaEl.empty();
+      this.approvalAreaEl.hidden = true;
+      return;
+    }
+    this.approvalAreaEl.hidden = false;
+    if (this.approvalAreaEl.getAttribute('data-sig') === sig) return;
+    this.approvalAreaEl.empty();
+    this.approvalAreaEl.setAttribute('data-sig', sig);
+
+    const rev = this.backendRevision;
+    const selectionRevision = tab.selectionRevision;
     for (const req of pending) {
       const card = this.approvalAreaEl.createDiv({ cls: 't3c-approval-card', attr: { role: 'region', 'aria-label': '待确认审批' } });
       card.createEl('strong', { cls: 't3c-approval-title', text: req.title ?? '需要运行审批' });
@@ -1585,6 +1628,7 @@ export default class ObsidianT3CodeView extends ItemView {
           decision,
           ...(feedback ? { feedback } : {}),
         });
+        if (this.isStaleTab(tab, rev, selectionRevision)) return;
         tab.pendingFeedback.delete(req.id);
       };
       const acceptBtn = this.button(actions, '允许一次', () => respond('accept'));
@@ -1895,8 +1939,14 @@ export default class ObsidianT3CodeView extends ItemView {
     entry.lastRenderedText = text;
     const comp = new Component();
     comp.load();
-    await renderSafeMarkdown(this.app, text, entry.bodyEl, comp);
-    if (!this.visible || !entry.element.parentElement || entry.renderSeq !== seq) {
+    const committed = await renderSafeMarkdown(
+      this.app,
+      text,
+      entry.bodyEl,
+      comp,
+      () => this.visible && Boolean(entry.element.parentElement) && entry.renderSeq === seq,
+    );
+    if (!committed) {
       comp.unload();
       return;
     }

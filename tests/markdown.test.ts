@@ -16,8 +16,8 @@ class MiniNode {
   className = '';
   textContent = '';
 
-  constructor(tag: string, public readonly ownerDocument: MiniDoc) {
-    this.tagName = tag.toUpperCase();
+  constructor(tag: string, public readonly ownerDocument: MiniDoc, preserveCase = false) {
+    this.tagName = preserveCase ? tag : tag.toUpperCase();
   }
 
   get attributes() {
@@ -59,7 +59,7 @@ class MiniNode {
     const res: MiniNode[] = [];
     const walk = (n: MiniNode) => {
       for (const c of n.children) {
-        if (tags.has(c.tagName)) res.push(c);
+        if (tags.has(c.tagName.toUpperCase())) res.push(c);
         walk(c);
       }
     };
@@ -94,9 +94,9 @@ describe('safe native markdown sanitization & rendering', () => {
     const { markdown, inertFallback } = sanitizeUntrustedMarkdown(input);
     expect(inertFallback).toBe(false);
     expect(markdown).toContain('# Heading');
-    expect(markdown).toContain('\\![[Private.md]]');
-    expect(markdown).toContain('\\![img](https://example.org/track)');
-    expect(markdown).toContain('\\![ref][1]');
+    expect(markdown).toContain('(blocked embed: Private.md)');
+    expect(markdown).toContain('img (blocked image)');
+    expect(markdown).toContain('ref (blocked image)');
     expect(markdown).toContain('[ok](https://example.com)');
     expect(markdown).toContain('[wrapped](https://example.com/x)');
     expect(markdown).toContain('bad (blocked link)');
@@ -182,5 +182,63 @@ describe('safe native markdown sanitization & rendering', () => {
     expect(container.classes.has('t3c-msg-plain')).toBe(true);
     expect(container.textContent).toBe('# Broken');
     vi.restoreAllMocks();
+  });
+
+  it('blocks backslash-escaped images, multiline images, shortcut ref images, nested fences, lowercase SVGs, and stale async commits', async () => {
+    const adversarial = [
+      String.raw`\![track](https://evil.com/p.png) and \![[VaultNote]]`,
+      '![multi\nalt](https://evil.com/multi.png)',
+      '![shortcut]\n[shortcut]: https://evil.com/shortcut.png\n[badref]: obsidian://open?vault=x',
+      '> ```dataviewjs',
+      '> await dv.io.load("Secret")',
+      '> ```',
+      '- ```templater',
+      '  <% tp.file.title %>',
+      '  ```',
+    ].join('\n');
+
+    const { markdown } = sanitizeUntrustedMarkdown(adversarial);
+    expect(markdown).not.toContain('![track]');
+    expect(markdown).not.toContain('![[VaultNote]]');
+    expect(markdown).not.toContain('![multi');
+    expect(markdown).not.toContain('![shortcut]');
+    expect(markdown).not.toContain('obsidian://');
+    expect(markdown).toContain('> ```text');
+    expect(markdown).toContain('- ```text');
+    expect(markdown).not.toContain('dataviewjs');
+    expect(markdown).not.toContain('templater');
+
+    // Realistic Chromium lowercase HTML5 SVG & link tags + extra dangerous tags
+    const doc = new MiniDoc();
+    const root = new MiniNode('div', doc, true);
+    const lcSvg = new MiniNode('svg', doc, true);
+    const lcLinkTag = new MiniNode('link', doc, true);
+    const lcBadA = new MiniNode('a', doc, true);
+    lcBadA.setAttribute('href', 'javascript:alert(1)');
+    root.appendChild(lcSvg);
+    root.appendChild(lcLinkTag);
+    root.appendChild(lcBadA);
+    hardenRenderedMarkdown(root as unknown as HTMLElement);
+    expect(root.children).not.toContain(lcSvg);
+    expect(root.children).not.toContain(lcLinkTag);
+    expect(lcBadA.getAttribute('href')).toBeNull();
+
+    // Out-of-order async render MUST NOT mutate container when shouldCommit() returns false
+    const container = doc.createElement('div');
+    container.setText('current fresh output');
+    const comp = new Component();
+    const app = new App();
+    let allowCommit = false;
+    vi.spyOn(MarkdownRenderer, 'render').mockImplementationOnce(async (_app, _md, el) => {
+      const p = doc.createElement('p');
+      p.textContent = 'stale chunk';
+      el.appendChild(p as unknown as HTMLElement);
+    });
+    const committed = await renderSafeMarkdown(app, 'stale', container as unknown as HTMLElement, comp, () => allowCommit);
+    expect(committed).toBe(false);
+    expect(container.textContent).toBe('current fresh output');
+    allowCommit = true;
+    const ok = await renderSafeMarkdown(app, '# Fresh', container as unknown as HTMLElement, comp, () => allowCommit);
+    expect(ok).toBe(true);
   });
 });

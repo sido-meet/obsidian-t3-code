@@ -350,18 +350,18 @@ export function resolveStatusBanner(input: {
       showRetry: true,
     };
   }
-  if (input.error) {
-    return {
-      tone: 'error',
-      message: input.error,
-      showRetry: false,
-    };
-  }
   if (input.hasUncertainDispatch) {
     return {
       tone: 'warning',
       message: '上一条消息发送状态待确认，请点重试向服务端核对（不会重复发送）。',
       showRetry: true,
+    };
+  }
+  if (input.error) {
+    return {
+      tone: 'error',
+      message: input.error,
+      showRetry: false,
     };
   }
   if (input.blocksVaultSend) {

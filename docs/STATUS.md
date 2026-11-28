@@ -137,3 +137,31 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - [src/ui/ObsidianT3CodeView.ts](../src/ui/ObsidianT3CodeView.ts) & [styles.css](../styles.css)：全面移除对 `CliChat`/`cliRunner` 的直接耦合，改为通过 `T3BackendManager` + `T3Store` 驱动；在保留零顶栏、`>= 600px` 双栏布局、多标签隔离、安全外部链接与框外笔记注脚基础上，接入实时多 Agent/模型发现与刷新、会话内模型切换、240° SVG 用量进度圆弧与真实 token 明细、交互式权限切换（Vault 重叠锁定 `approval-required`）、流式输出与 Stop 中断按钮、Tool Call 紧凑胶囊及受 `supportsFeedback` 约束的内联安全审批卡片。
   - 单元测试：[tests/__mocks__/obsidian.ts](../tests/__mocks__/obsidian.ts)、[tests/input.test.ts](../tests/input.test.ts)、[tests/smoke.test.ts](../tests/smoke.test.ts)、[tests/sidebar-model.test.ts](../tests/sidebar-model.test.ts)、[tests/sidebar-view.test.ts](../tests/sidebar-view.test.ts)。
 - **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **23 个测试文件 / 107 条测试全过**（`sidebar-model.ts` **100%** Stmts/Branch/Funcs/Lines、`rpc.ts` **100%**、`store.ts` **100%**、`ObsidianT3CodeView.ts` **86.58%** Stmts），`main.js` 为 **`135,542` 字节**（`< 204,800` 字节上限，仍低于 M0 前基线 `192,306` 字节）。
+
+
+---
+
+## 2026-11-28 — M6 完成：独立 Code Review、实时 tokenUsage 保真修复、全链路 E2E 与打包门禁收官
+
+- **状态**：已完成 M6（独立子 Agent Code Review 问题全量闭环、live `tokenUsage` 保真修复、全量自动化门禁与本机真实 Server 端到端实测通过；工作区保持在独立特性分支 `feat/sidebar-v2-redesign`，正式 Vault 未动）。
+- **独立 Review 与关键加固**：
+  - 依据独立 Code Review 发现（7 项 High、6 项 Medium、1 项 Low），完成安全、并发与竞态加固：
+    - [src/ui/markdown.ts](../src/ui/markdown.ts)：封堵反斜杠转义图片链接（`\\![...]`）、跨行/引用式图片与危险引用定义、`> \`\`\`dataviewjs` 等容器嵌套代码块、大写畸形 HTML 标签（`.toUpperCase()`）检查，以及异步离屏渲染与 `shouldCommit` 竞态防覆写。
+    - [src/t3/vault-guard.ts](../src/t3/vault-guard.ts)：新增向上回溯最近存在祖先目录的 `realpath` 解析，防止未创建子路径通过符号链接/联接点穿透 Vault 护栏。
+    - [src/t3/rpc.ts](../src/t3/rpc.ts) & [src/t3/rpc-backend.ts](../src/t3/rpc-backend.ts)：补齐 `code=` 与 JSON 字段凭据脱敏，提供 `getResolvedProjectWorkspaceRoot()` 与四态写入对账 `inspectPendingWrite()`。
+    - [src/t3/store.ts](../src/t3/store.ts) & [src/t3/backend-manager.ts](../src/t3/backend-manager.ts)：消除 `retryPendingDispatch` 状态切换 TOCTOU 竞态，防止表单 `runtimeMode` 误覆盖既有会话权限模式，校验服务端 `projectId.workspaceRoot` 是否与 Vault 重叠，并统一保留重试模式字段。
+    - [src/t3/protocol-v2.ts](../src/t3/protocol-v2.ts)：增量 `thread.*` 事件与本地 `rawProjection.thread` 合并（防止丢失 `title`/`status`/`runtimeMode`/`activeProviderThreadId`）；同时对齐官方 `orchestrationV2Projection.ts`，修复后继无 `tokenUsage` 的 `provider-turn.updated` 覆写清空前置实时用量的缺陷，并在非占位 `provider-thread.updated` 时同步更新 `activeProviderThreadId`。
+    - [src/ui/sidebar-model.ts](../src/ui/sidebar-model.ts) & [src/ui/ObsidianT3CodeView.ts](../src/ui/ObsidianT3CodeView.ts)：修复未确认重放横幅死锁、`fallback-cli` 状态下 RPC 重连按钮路由、多标签异步切换 `isStaleTab` 守卫、流式刷新保留 `.t3c-approval-feedback` 焦点与输入，以及页签切换/关闭时释放 `subscribeThread` 订阅。
+  - 扩展回归测试：[tests/markdown.test.ts](../tests/markdown.test.ts)、[tests/vault-guard.test.ts](../tests/vault-guard.test.ts)、[tests/protocol-v2.test.ts](../tests/protocol-v2.test.ts)、[tests/discovery.test.ts](../tests/discovery.test.ts)、[tests/auth.test.ts](../tests/auth.test.ts)、[tests/backend-manager.test.ts](../tests/backend-manager.test.ts)、[tests/rpc-backend.test.ts](../tests/rpc-backend.test.ts)、[tests/sidebar-view.test.ts](../tests/sidebar-view.test.ts)。
+- **最终门禁验证结果**（全部基于最终代码编辑后实跑）：
+  - `npm run typecheck`：退出码 0（0 错误）
+  - `npm run lint`（`eslint . --max-warnings=0`）：退出码 0（0 警告）
+  - `npm run test:coverage`：**23 个测试文件 / 112 条测试全过**（`All files` **89.25% Stmts / 81.77% Branch / 91.2% Funcs / 89.25% Lines**；`rpc.ts` / `store.ts` / `vault-guard.ts` / `sidebar-model.ts` / `backend.ts` / `cli-backend.ts` 均 **100% Stmts**，`protocol-v2.ts` **97.1%**、`markdown.ts` **98.79%**、`discovery.ts` **95.33%**、`backend-manager.ts` **90.22%**、`ObsidianT3CodeView.ts` **87.7%**、`auth.ts` **87.59%**、`rpc-backend.ts` **87.37%**）
+  - `npm run build` + `verify-bundle.mjs`：`main.js` 为 **`141,443` 字节**（`< 204,800` 字节上限，剩余余量 `63,357` 字节；M0 前基线 `192,306` 字节 -> M0 后 `60,192` 字节 -> M6 终版 `141,443` 字节）
+- **本机真实 T3 Code Server 端到端实测**：
+  - 实测目标：`http://127.0.0.1:3773`（`serverVersion: 0.1.13-nightly.20261125.5258`，`orchestrationProtocolVersion: 2`），测试目录限缩于 `~/.t3/scratch/6c3585ae-d666-4dec-be92-325ecb779be1`。
+  - 验证项全绿：服务端发现、`.cmd` `shell: false` 短期 Session 签发、`connected-rpc` 全 11 项能力位就绪、真实多 Agent 目录（`codex` 13 模型 `reasoningEffort`、`claudeAgent` 161 模型 `effort`、`antigravity` 11 模型 `thought_level`）、首轮真实问答及 Turn 1 实时 `contextUsage`（`usedTokens: 25823, maxTokens: 950000, source: 'providerTurn'`）、双客户端跨端状态同步（`plan` <-> `default`）、断线重连 `afterSequence` 追平、长回复 `stopThread` 中断（`interrupted`）、真实 `approval-required` 权限请求内联拒绝（`supportsFeedback: false`）、`401` 自动续期（`renewOnUnauthorized`）、不可达端口自动降级至 `CliBackend`（`phase: 'fallback-cli'`），以及退出后经 `t3 auth session list --json` 核验 **`0` 条未吊销残留 `t3-codian` 会话**。
+- **已知边界与使用限制**：
+  - `usageLimits` 诚实反映各 Provider 上行支持情况（本机实测 `codex`/`claudeAgent` 返回 `unsupported`，`antigravity` 返回 `unknown`）。
+  - 仅支持 Obsidian 桌面端（依赖本机回环发现与 CLI 进程通信），不支持移动端。
+  - 尚未自动覆盖用户正式知识库 `E:\Documents\Obsidian-Vault`，待用户审阅分支并按部署说明手动拷贝测试。

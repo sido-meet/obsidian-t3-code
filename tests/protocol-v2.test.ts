@@ -270,6 +270,28 @@ describe('protocol-v2 normalizers', () => {
     }, 'th-1');
     expect(metaEv.detail?.thread.title).toBe('Renamed');
 
+    // Partial delta event without title/status/runtimeMode must NOT clobber existing thread metadata
+    acc.rawProjection.thread = {
+      id: 'th-1',
+      title: 'Renamed',
+      status: 'running',
+      runtimeMode: 'approval-required',
+      activeProviderThreadId: 'pt-1',
+    };
+    acc.detail = { ...acc.detail!, thread: { ...acc.detail!.thread, runtimeMode: 'approval-required' } };
+    const deltaEv = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 34.5,
+      event: { id: 'ev-5d', type: 'thread.interaction-mode-updated', payload: { id: 'th-1', interactionMode: 'plan' } },
+    }, 'th-1');
+    expect(deltaEv.detail?.thread).toMatchObject({
+      title: 'Renamed',
+      status: 'running',
+      runtimeMode: 'approval-required',
+      interactionMode: 'plan',
+    });
+    expect((acc.rawProjection.thread as Record<string, unknown>).activeProviderThreadId).toBe('pt-1');
+
     const runDone = reduceThreadStreamItem(acc, {
       kind: 'event',
       sequence: 35,
@@ -286,5 +308,98 @@ describe('protocol-v2 normalizers', () => {
       runtimeRequests: [{ id: 'req-2', status: 'pending', responseCapability: { type: 'live' } }],
     });
     expect(direct.detail.runtimeRequests[0].supportsFeedback).toBe(false);
+  });
+
+  it('preserves prior tokenUsage on provider-turn.updated and skips queued placeholder activeProviderThreadId', () => {
+    const acc: ThreadStreamAccumulator = { rawProjection: {}, seenEventIds: new Set() };
+    reduceThreadStreamItem(acc, {
+      kind: 'snapshot',
+      snapshotSequence: 10,
+      projection: {
+        thread: { id: 'th-usage', title: 'Usage Test', status: 'running', activeProviderThreadId: 'pt-live' },
+        runs: [],
+        messages: [],
+        turnItems: [],
+        runtimeRequests: [],
+        providerTurns: [],
+        providerThreads: [],
+      },
+    }, 'th-usage');
+
+    // Queued placeholder must not replace activeProviderThreadId
+    reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 11,
+      event: {
+        id: 'ev-pt-queued',
+        type: 'provider-thread.updated',
+        payload: {
+          id: 'pt-queued',
+          appThreadId: 'th-usage',
+          status: 'not_loaded',
+          firstRunOrdinal: null,
+          nativeThreadRef: null,
+          providerSessionId: null,
+        },
+      },
+    }, 'th-usage');
+    expect((acc.rawProjection.thread as Record<string, unknown>).activeProviderThreadId).toBe('pt-live');
+
+    // Real active provider thread updates activeProviderThreadId
+    reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 12,
+      event: {
+        id: 'ev-pt-active',
+        type: 'provider-thread.updated',
+        payload: {
+          id: 'pt-next',
+          appThreadId: 'th-usage',
+          status: 'active',
+          firstRunOrdinal: 1,
+          nativeThreadRef: 'native-1',
+          providerSessionId: 'sess-1',
+        },
+      },
+    }, 'th-usage');
+    expect((acc.rawProjection.thread as Record<string, unknown>).activeProviderThreadId).toBe('pt-next');
+
+    // First provider-turn.updated carries tokenUsage while running
+    const withUsage = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 13,
+      event: {
+        id: 'ev-turn-usage',
+        type: 'provider-turn.updated',
+        payload: {
+          id: 'turn-1',
+          providerThreadId: 'pt-next',
+          status: 'running',
+          tokenUsage: { usedTokens: 25807, maxTokens: 950000, updatedAt: '2026-11-28T04:25:50.545Z' },
+        },
+      },
+    }, 'th-usage');
+    expect(withUsage.detail?.contextUsage).toMatchObject({ status: 'available', usedTokens: 25807, maxTokens: 950000 });
+
+    // Terminal provider-turn.updated arrives without tokenUsage -> must preserve prior tokenUsage
+    const terminalWithoutUsage = reduceThreadStreamItem(acc, {
+      kind: 'event',
+      sequence: 14,
+      event: {
+        id: 'ev-turn-done',
+        type: 'provider-turn.updated',
+        payload: {
+          id: 'turn-1',
+          providerThreadId: 'pt-next',
+          status: 'completed',
+        },
+      },
+    }, 'th-usage');
+    expect(terminalWithoutUsage.detail?.contextUsage).toMatchObject({
+      status: 'available',
+      usedTokens: 25807,
+      maxTokens: 950000,
+      source: 'providerTurn',
+    });
   });
 });

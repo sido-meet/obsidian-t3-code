@@ -1,5 +1,5 @@
 import { realpath } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { workspacesOverlap } from './workspace';
 
 export interface VaultGuardContext {
@@ -21,11 +21,20 @@ export class VaultSafetyGuard {
   private async normalizePath(targetPath: string): Promise<string> {
     const trimmed = targetPath.trim();
     if (!trimmed) return '';
+    const abs = resolve(trimmed);
     const rf = this.deps.realpathFn ?? realpath;
-    try {
-      return await rf(trimmed);
-    } catch {
-      return resolve(trimmed);
+    const missingSegments: string[] = [];
+    let probe = abs;
+    while (true) {
+      try {
+        const real = await rf(probe);
+        return missingSegments.length > 0 ? resolve(real, ...missingSegments.reverse()) : real;
+      } catch {
+        const parent = dirname(probe);
+        if (parent === probe) return abs;
+        missingSegments.push(basename(probe));
+        probe = parent;
+      }
     }
   }
 

@@ -43,6 +43,12 @@ describe('VaultSafetyGuard', () => {
       expect(await guard.isOverlapping(vault, alias)).toBe(true);
       await expect(guard.assertCanSend({ vaultPath: vault, projectWorkspacePath: alias }, 'full-access'))
         .rejects.toThrow('approval-required');
+      await expect(guard.assertCanSetRuntimeMode({ vaultPath: vault, projectWorkspacePath: alias }, 'full-access'))
+        .rejects.toThrow('禁止');
+      const nonExistentNested = join(alias, 'nested', 'missing-dir');
+      expect(await guard.isOverlapping(vault, nonExistentNested)).toBe(true);
+      await expect(guard.assertCanSend({ vaultPath: vault, projectWorkspacePath: nonExistentNested }, 'auto'))
+        .rejects.toThrow('approval-required');
       await expect(guard.assertCanSend({ vaultPath: vault, projectWorkspacePath: alias }, 'approval-required'))
         .resolves.toBeUndefined();
     } finally {

@@ -180,5 +180,23 @@ describe('discovery', () => {
       isAliveFn: () => true,
       fetcher: mismatchFetcher,
     })).rejects.toThrow('版本与运行时文件不匹配');
+
+    // Non-200 HTTP and network errors + .cmd header/mode-flag/exit-line tampering
+    await expect(discoverLocalServer({ serverUrl: 'http://127.0.0.1:3773' }, {
+      fetcher: vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 503 })),
+    })).rejects.toThrow('HTTP 503');
+    await expect(discoverLocalServer({ serverUrl: 'http://127.0.0.1:3773' }, {
+      fetcher: vi.fn<typeof fetch>().mockRejectedValue(new Error('ECONNREFUSED')),
+    })).rejects.toThrow('无法探测');
+
+    const badHeader = [...VALID_CMD_LINES];
+    badHeader[1] = 'rem untrusted launcher';
+    expect(() => parseT3CmdLauncher('mock.cmd', () => badHeader.join('\n'))).toThrow('头部校验');
+    const badModeFlag = [...VALID_CMD_LINES];
+    badModeFlag[5] = 'set "OTHER=1"';
+    expect(() => parseT3CmdLauncher('mock.cmd', () => badModeFlag.join('\n'))).toThrow('运行模式标志');
+    const badExit = [...VALID_CMD_LINES];
+    badExit[13] = 'exit /b 0';
+    expect(() => parseT3CmdLauncher('mock.cmd', () => badExit.join('\n'))).toThrow('执行模板');
   });
 });

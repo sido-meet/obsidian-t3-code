@@ -55,6 +55,7 @@ export class T3BackendManager {
   private configuredProjectPath = '';
   private configuredProjectId = '';
   private workspacePath = '';
+  private resolvedServerRoot?: string;
 
   constructor(private readonly options: BackendManagerOptions) {
     this.store = options.store ?? new T3Store();
@@ -84,7 +85,19 @@ export class T3BackendManager {
   }
 
   async isVaultOverlapping(): Promise<boolean> {
-    return this.vaultGuard.isOverlapping(this.vaultPath, this.workspacePath);
+    if (await this.vaultGuard.isOverlapping(this.vaultPath, this.workspacePath)) return true;
+    if (this.resolvedServerRoot && await this.vaultGuard.isOverlapping(this.vaultPath, this.resolvedServerRoot)) {
+      return true;
+    }
+    return false;
+  }
+
+  private async getGuardContexts(): Promise<Array<{ vaultPath: string; projectWorkspacePath: string }>> {
+    const contexts = [{ vaultPath: this.vaultPath, projectWorkspacePath: this.workspacePath }];
+    if (this.resolvedServerRoot && this.resolvedServerRoot !== this.workspacePath) {
+      contexts.push({ vaultPath: this.vaultPath, projectWorkspacePath: this.resolvedServerRoot });
+    }
+    return contexts;
   }
 
   private async handleRpcDropped(reason: string): Promise<void> {
@@ -109,6 +122,7 @@ export class T3BackendManager {
     this.configuredProjectPath = configuredProjectPath.trim();
     this.configuredProjectId = configuredProjectId.trim();
     this.workspacePath = resolveWorkspacePath(this.configuredProjectPath, this.vaultPath);
+    this.resolvedServerRoot = undefined;
 
     this.store.setConnection('connecting');
     const settings = this.options.getSettings();
@@ -119,6 +133,20 @@ export class T3BackendManager {
 
     try {
       const caps = await this.rpcBackend.connect(this.workspacePath, this.configuredProjectId);
+      const serverRoot = typeof this.rpcBackend.getResolvedProjectWorkspaceRoot === 'function'
+        ? this.rpcBackend.getResolvedProjectWorkspaceRoot()
+        : undefined;
+      this.resolvedServerRoot = serverRoot;
+      if (
+        serverRoot
+        && this.configuredProjectPath
+        && await this.vaultGuard.isOverlapping(this.vaultPath, serverRoot)
+        && !(await this.vaultGuard.isOverlapping(this.vaultPath, this.workspacePath))
+      ) {
+        await this.rpcBackend.disconnect();
+        this.resolvedServerRoot = undefined;
+        throw new Error('配置的项目 ID 在服务端指向当前知识库目录，但与所填项目目录不一致；请对齐后再连接。');
+      }
       this.activeBackend = this.rpcBackend;
       this.store.setConnection('connected-rpc', caps);
       const [providers, threads] = await Promise.all([
@@ -193,6 +221,65 @@ export class T3BackendManager {
     });
   }
 
+  private async executeSend(
+    targetBackend: T3Backend,
+    input: SendMessageInput & { knownRuntimeMode?: string },
+    flags: { createdNewThread: boolean },
+  ): Promise<{ threadId: string; runId?: string; sequence?: number }> {
+    const state = this.store.getSnapshot();
+    const storeThread = input.threadId
+      ? (state.activeThreadDetails.get(input.threadId)?.thread ?? state.threads.find(t => t.threadId === input.threadId))
+      : undefined;
+    const existingThread = Boolean(input.threadId && !flags.createdNewThread);
+    const effectiveRuntimeMode = existingThread
+      ? (storeThread?.runtimeMode ?? input.knownRuntimeMode)
+      : (input.runtimeMode ?? input.knownRuntimeMode);
+
+    for (const ctx of await this.getGuardContexts()) {
+      await this.vaultGuard.assertCanSend(ctx, effectiveRuntimeMode);
+    }
+
+    this.store.upsertPendingDispatch({
+      commandId: input.commandId,
+      messageId: input.messageId,
+      threadId: input.threadId,
+      createdNewThread: flags.createdNewThread,
+      projectId: input.projectId,
+      text: input.text,
+      runtimeMode: effectiveRuntimeMode,
+      modelSelection: input.modelSelection,
+      interactionMode: input.interactionMode,
+      status: 'sending',
+      createdAt: this.now(),
+    });
+
+    try {
+      const result = await targetBackend.sendMessage(input);
+      this.store.clearPendingDispatch(input.commandId);
+      return result;
+    } catch (error) {
+      if (error instanceof UncertainWriteError) {
+        const createdThreadId = this.rpcBackend.getPendingThreadIdForCommand(input.commandId);
+        this.store.upsertPendingDispatch({
+          commandId: input.commandId,
+          messageId: input.messageId,
+          threadId: input.threadId ?? createdThreadId,
+          createdNewThread: flags.createdNewThread,
+          projectId: input.projectId,
+          text: input.text,
+          runtimeMode: effectiveRuntimeMode,
+          modelSelection: input.modelSelection,
+          interactionMode: input.interactionMode,
+          status: 'uncertain',
+          createdAt: this.now(),
+        });
+        throw error;
+      }
+      this.store.clearPendingDispatch(input.commandId);
+      throw error;
+    }
+  }
+
   async sendMessage(
     input: Omit<SendMessageInput, 'commandId' | 'messageId'> & {
       commandId?: string;
@@ -200,54 +287,17 @@ export class T3BackendManager {
       knownRuntimeMode?: string;
     },
   ): Promise<{ threadId: string; runId?: string; sequence?: number }> {
-    const state = this.store.getSnapshot();
-    const storeThread = input.threadId
-      ? (state.activeThreadDetails.get(input.threadId)?.thread ?? state.threads.find(t => t.threadId === input.threadId))
-      : undefined;
-    const effectiveRuntimeMode = input.runtimeMode ?? input.knownRuntimeMode ?? storeThread?.runtimeMode;
-
-    await this.vaultGuard.assertCanSend(
-      { vaultPath: this.vaultPath, projectWorkspacePath: this.workspacePath },
-      effectiveRuntimeMode,
-    );
-
     const commandId = input.commandId ?? this.randomId();
     const messageId = input.messageId ?? this.randomId();
-    this.store.upsertPendingDispatch({
-      commandId,
-      messageId,
-      threadId: input.threadId,
-      projectId: input.projectId,
-      text: input.text,
-      status: 'sending',
-      createdAt: this.now(),
-    });
-
-    try {
-      const result = await this.activeBackend.sendMessage({
-        ...input,
-        commandId,
-        messageId,
-      });
-      this.store.clearPendingDispatch(commandId);
-      return result;
-    } catch (error) {
-      if (error instanceof UncertainWriteError) {
-        const createdThreadId = this.rpcBackend.getPendingThreadIdForCommand(commandId);
-        this.store.upsertPendingDispatch({
-          commandId,
-          messageId,
-          threadId: input.threadId ?? createdThreadId,
-          projectId: input.projectId,
-          text: input.text,
-          status: 'uncertain',
-          createdAt: this.now(),
-        });
-        throw error;
-      }
-      this.store.clearPendingDispatch(commandId);
-      throw error;
+    const priorPending = this.store.getSnapshot().pendingDispatches.get(commandId);
+    if (priorPending?.status === 'uncertain' && this.activeBackend.mode !== 'rpc') {
+      throw new Error('当前处于 CLI 降级模式，禁止通过 CLI 重放未确认的 RPC 消息；请先恢复 RPC 连接。');
     }
+    return this.executeSend(
+      this.activeBackend,
+      { ...input, commandId, messageId },
+      { createdNewThread: priorPending?.createdNewThread ?? !input.threadId },
+    );
   }
 
   /**
@@ -259,26 +309,48 @@ export class T3BackendManager {
     if (!pending) {
       throw new Error('未找到需要重试的待确认发送记录。');
     }
-    if (this.activeBackend.mode !== 'rpc') {
+    if (this.activeBackend !== this.rpcBackend || this.activeBackend.mode !== 'rpc') {
       throw new Error('当前处于 CLI 降级模式，禁止通过 CLI 重放未确认的 RPC 消息；请先恢复 RPC 连接。');
     }
 
+    let status: 'committed' | 'thread-only' | 'missing' | 'unknown' = 'missing';
     if (pending.threadId) {
-      const exists = await this.rpcBackend.hasMessageOnServer(pending.threadId, pending.messageId);
-      if (exists) {
+      if (typeof this.rpcBackend.inspectPendingWrite === 'function') {
+        status = await this.rpcBackend.inspectPendingWrite(pending.threadId, pending.messageId);
+      } else {
+        status = (await this.rpcBackend.hasMessageOnServer(pending.threadId, pending.messageId))
+          ? 'committed'
+          : 'thread-only';
+      }
+      if (status === 'committed') {
         this.store.clearPendingDispatch(commandId);
         await this.refreshThreads().catch(() => undefined);
         return { threadId: pending.threadId, deduplicated: true };
       }
+      if (status === 'unknown') {
+        throw new Error('无法核对服务端消息状态，请稍后重试。');
+      }
     }
 
-    const res = await this.sendMessage({
-      projectId: pending.projectId,
-      threadId: pending.threadId,
-      commandId: pending.commandId,
-      messageId: pending.messageId,
-      text: pending.text,
-    });
+    if (this.activeBackend !== this.rpcBackend || this.activeBackend.mode !== 'rpc') {
+      throw new Error('等待校验期间 RPC 连接已断开，已阻止降级重发。');
+    }
+
+    const replayThreadId = status === 'missing' ? undefined : pending.threadId;
+    const res = await this.executeSend(
+      this.rpcBackend,
+      {
+        projectId: pending.projectId,
+        threadId: replayThreadId,
+        commandId: pending.commandId,
+        messageId: pending.messageId,
+        text: pending.text,
+        ...(pending.modelSelection ? { modelSelection: pending.modelSelection } : {}),
+        ...(pending.runtimeMode ? { runtimeMode: pending.runtimeMode, knownRuntimeMode: pending.runtimeMode } : {}),
+        ...(pending.interactionMode ? { interactionMode: pending.interactionMode } : {}),
+      },
+      { createdNewThread: !replayThreadId || Boolean(pending.createdNewThread) },
+    );
     return { threadId: res.threadId, deduplicated: false };
   }
 
@@ -291,10 +363,9 @@ export class T3BackendManager {
   }
 
   async setRuntimeMode(threadId: string, runtimeMode: string): Promise<void> {
-    await this.vaultGuard.assertCanSetRuntimeMode(
-      { vaultPath: this.vaultPath, projectWorkspacePath: this.workspacePath },
-      runtimeMode,
-    );
+    for (const ctx of await this.getGuardContexts()) {
+      await this.vaultGuard.assertCanSetRuntimeMode(ctx, runtimeMode);
+    }
     await this.activeBackend.setRuntimeMode(threadId, this.randomId(), runtimeMode);
   }
 
