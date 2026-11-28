@@ -12,7 +12,17 @@ describe('MVP input boundaries', () => {
 
   it('normalizes the configured paths without changing spaces in folder names', () => {
     expect(normalizeSettings({ cliPath: ' /opt/t3 ', projectPath: ' /data/Project A ' }))
-      .toEqual({ cliPath: '/opt/t3', projectPath: '/data/Project A', projectId: '', provider: 'codex', model: 'gpt-6-astra', modelPresets: '', includeNote: false });
+      .toEqual({
+        cliPath: '/opt/t3',
+        projectPath: '/data/Project A',
+        projectId: '',
+        provider: 'codex',
+        model: 'gpt-6-astra',
+        modelPresets: '',
+        includeNote: false,
+        serverUrl: '',
+        backendPreference: 'auto',
+      });
   });
   it('includes the selection ahead of the full note', () => {
     expect(composePrompt('Summarize', { path: 'Draft.md', selection: 'Chosen', body: 'Private remainder' }))

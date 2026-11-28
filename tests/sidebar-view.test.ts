@@ -36,7 +36,11 @@ vi.mock('../src/t3/cli', async () => {
   };
 });
 
-import ObsidianT3CodeView from '../src/ui/ObsidianT3CodeView';
+import type { BackendCapabilities, BackendEvent, ProviderDescriptor, ThreadDetail } from '../src/t3/backend';
+import { T3BackendManager } from '../src/t3/backend-manager';
+import { UncertainWriteError, type RpcBackend } from '../src/t3/rpc-backend';
+import { T3Store } from '../src/t3/store';
+import ObsidianT3CodeView, { type BackendManagerFactory } from '../src/ui/ObsidianT3CodeView';
 
 type Listener = (event: FakeEvent) => void;
 
@@ -516,7 +520,7 @@ describe('ObsidianT3CodeView V2 UI', () => {
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  function setupView(settingsPatch: Partial<Settings> = {}) {
+  function setupView(settingsPatch: Partial<Settings> = {}, factory?: BackendManagerFactory) {
     mkdirSync(vaultDir, { recursive: true });
     mkdirSync(projectDir, { recursive: true });
 
@@ -553,13 +557,15 @@ describe('ObsidianT3CodeView V2 UI', () => {
         'claudeAgent | claude-sonnet-4-6 | reasoningEffort=medium',
       ].join('\n'),
       includeNote: false,
+      serverUrl: '',
+      backendPreference: 'cli',
       ...settingsPatch,
     };
     const updateSettings = vi.fn(async (patch: Partial<Settings>) => {
       Object.assign(settings, patch);
     });
     const plugin = { settings, updateSettings, app } as unknown as ObsidianT3CodePlugin;
-    const view = new ObsidianT3CodeView({} as WorkspaceLeaf, plugin);
+    const view = new ObsidianT3CodeView({} as WorkspaceLeaf, plugin, factory);
     const viewStub = view as unknown as {
       app: unknown;
       contentEl: FakeElement;
@@ -895,5 +901,263 @@ describe('ObsidianT3CodeView V2 UI', () => {
     expect(activeChildren.length).toBeGreaterThan(0);
     await view.onClose();
     expect(activeChildren.every(c => c.unloaded)).toBe(true);
+  });
+
+  it('automatically falls back to CLI with retry banner when RPC fails and allows upgrading to RPC', async () => {
+    cliMocks.listThreads.mockResolvedValue([makeThread()]);
+    let rpcUp = false;
+    const rpcCaps: BackendCapabilities = {
+      mode: 'rpc',
+      supportsLiveCatalog: true,
+      supportsProviderRefresh: true,
+      supportsStreaming: true,
+      supportsStop: true,
+      supportsMidThreadModelSwitch: true,
+      supportsRuntimeModeSwitch: true,
+      supportsInteractionModeSwitch: true,
+      supportsApprovals: true,
+      supportsContextUsage: true,
+      supportsQuotaUsage: true,
+    };
+    const fakeRpc = {
+      mode: 'rpc',
+      connect: vi.fn(async () => {
+        if (!rpcUp) throw new Error('T3 Server 不可达 Bearer hidden-tok');
+        return rpcCaps;
+      }),
+      disconnect: vi.fn(async () => undefined),
+      getProviders: vi.fn(async () => []),
+      listThreads: vi.fn(async () => [makeThread()]),
+      openThread: vi.fn(async () => ({ unsubscribe: () => undefined })),
+      getPendingThreadIdForCommand: vi.fn(() => undefined),
+    } as unknown as RpcBackend;
+
+    const { view, root } = setupView(
+      { backendPreference: 'auto' },
+      p => new T3BackendManager({ getSettings: () => p.settings, rpcBackend: fakeRpc }),
+    );
+    await view.onOpen();
+    await waitReady(view);
+
+    const banner = root.querySelector('.t3c-banner')!;
+    expect(banner.hidden).toBe(false);
+    expect(banner.getAttribute('data-tone')).toBe('warning');
+    expect(root.querySelector('.t3c-banner-text')?.textContent).toContain('CLI 降级模式');
+    expect(root.querySelector('.t3c-banner-text')?.textContent).not.toContain('hidden-tok');
+
+    rpcUp = true;
+    root.querySelector('.t3c-banner-actions')!.querySelector('button')!.click();
+    await waitUntil(() => banner.hidden === true);
+    expect(banner.hidden).toBe(true);
+    await view.onClose();
+  });
+
+  it('drives live RPC multi-Agent catalog, 240° gauge arc, streaming + Stop, inline approval card, Vault lock, and idempotent retry', async () => {
+    const store = new T3Store();
+    const providers: ProviderDescriptor[] = [
+      {
+        instanceId: 'codex',
+        driver: 'codex',
+        displayName: 'Codex',
+        enabled: true,
+        installed: true,
+        status: 'ready',
+        reportsContextWindow: true,
+        supportedRuntimeModes: ['approval-required', 'full-access'],
+        showInteractionModeToggle: true,
+        quota: { status: 'unsupported', reason: 'unsupported', windows: [] },
+        models: [{
+          providerId: 'codex',
+          slug: 'gpt-6-astra',
+          name: 'GPT-6 Astra',
+          isDefault: true,
+          reasoningOption: {
+            id: 'reasoningEffort',
+            type: 'select',
+            label: 'Reasoning',
+            options: [{ id: 'high', label: 'High', isDefault: true }],
+          },
+          extraOptions: [],
+        }],
+      },
+      {
+        instanceId: 'claudeAgent',
+        driver: 'claudeAgent',
+        displayName: 'Claude',
+        enabled: true,
+        installed: true,
+        status: 'ready',
+        reportsContextWindow: true,
+        supportedRuntimeModes: ['approval-required'],
+        showInteractionModeToggle: true,
+        quota: { status: 'unknown', windows: [] },
+        models: [{
+          providerId: 'claudeAgent',
+          slug: 'claude-sonnet-4-6',
+          name: 'Claude Sonnet',
+          reasoningOption: {
+            id: 'effort',
+            type: 'select',
+            label: 'Reasoning',
+            options: [{ id: 'ultrathink', label: 'Max' }],
+          },
+          extraOptions: [{ id: 'fastMode', type: 'boolean', label: 'Fast Mode', currentValue: false }],
+        }],
+      },
+    ];
+    const rpcCaps: BackendCapabilities = {
+      mode: 'rpc',
+      supportsLiveCatalog: true,
+      supportsProviderRefresh: true,
+      supportsStreaming: true,
+      supportsStop: true,
+      supportsMidThreadModelSwitch: true,
+      supportsRuntimeModeSwitch: true,
+      supportsInteractionModeSwitch: true,
+      supportsApprovals: true,
+      supportsContextUsage: true,
+      supportsQuotaUsage: true,
+    };
+
+    const thread = makeThread({ threadId: 'th-rpc', title: 'Live RPC Session', runtimeMode: 'approval-required', status: 'idle' });
+    let threadListener: ((ev: BackendEvent) => void) | undefined;
+    let dropFirstSend = true;
+    const respondMock = vi.fn(async () => undefined);
+    const stopMock = vi.fn(async () => undefined);
+    const setModelMock = vi.fn(async () => undefined);
+    const refreshProvidersMock = vi.fn(async () => providers);
+    const hasMessageOnServerMock = vi.fn(async () => false);
+
+    const fakeRpc = {
+      mode: 'rpc',
+      connect: vi.fn(async () => rpcCaps),
+      disconnect: vi.fn(async () => undefined),
+      getProviders: refreshProvidersMock,
+      listThreads: vi.fn(async () => [thread]),
+      openThread: vi.fn(async (_id: string, cb: (ev: BackendEvent) => void) => {
+        threadListener = cb;
+        const initial: ThreadDetail = {
+          thread,
+          messages: [{ id: 'm1', role: 'user', text: 'hi', streaming: false }],
+          turnItems: [{ id: 'ti-1', type: 'command', title: 'rg', status: 'running' }],
+          runtimeRequests: [],
+          contextUsage: { status: 'available', usedTokens: 40_000, maxTokens: 100_000, percent: 40 },
+          runIds: ['run-1'],
+          lastSequence: 10,
+          synchronized: true,
+        };
+        store.setThreadDetail('th-rpc', initial);
+        cb({ type: 'thread.detail', detail: initial });
+        return { unsubscribe: () => undefined };
+      }),
+      sendMessage: vi.fn(async () => {
+        if (dropFirstSend) {
+          dropFirstSend = false;
+          throw new UncertainWriteError('发送过程中连接断开。');
+        }
+        return { threadId: 'th-rpc' };
+      }),
+      stopThread: stopMock,
+      setModelSelection: setModelMock,
+      setRuntimeMode: vi.fn(async () => undefined),
+      setInteractionMode: vi.fn(async () => undefined),
+      respondRuntimeRequest: respondMock,
+      hasMessageOnServer: hasMessageOnServerMock,
+      getPendingThreadIdForCommand: vi.fn(() => 'th-rpc'),
+    } as unknown as RpcBackend;
+
+    let seq = 0;
+    const { view, root } = setupView(
+      { projectPath: vaultDir, backendPreference: 'auto' },
+      p => new T3BackendManager({
+        getSettings: () => p.settings,
+        store,
+        rpcBackend: fakeRpc,
+        randomId: () => `id-${++seq}`,
+      }),
+    );
+
+    await view.onOpen();
+    await waitReady(view);
+    await (view as unknown as { switchThread: (t?: CliThread) => Promise<void> }).switchThread(thread);
+    await flush();
+
+    // 240° SVG gauge displays 40% & popover honestly displays unsupported quota
+    expect(root.querySelector('.t3c-usage-pct')?.textContent).toBe('40%');
+    expect(root.querySelector('.t3c-usage-arc')?.hidden).toBe(false);
+    root.querySelector('.t3c-usage-chip')!.click();
+    expect(root.querySelector('.t3c-usage-popover')?.textContent).toContain('暂不支持额度查询');
+
+    // Vault overlap disables non-approval-required mode switches
+    root.querySelector('.t3c-perm-chip')!.click();
+    const permButtons = root.querySelector('.t3c-perm-popover')!.querySelectorAll('button');
+    expect(permButtons.find(b => b.textContent.includes('完全访问'))?.disabled).toBe(true);
+
+    // Mid-thread model switching & provider refresh works live
+    root.querySelector('.t3c-model-chip')!.click();
+    root.querySelector('.t3c-mp-refresh')!.click();
+    await flush();
+    expect(refreshProvidersMock).toHaveBeenCalledWith(true);
+
+    const claudeBtn = root.querySelectorAll('.t3c-mp-agent-btn').find(b => b.getAttribute('aria-label') === 'claudeAgent')!;
+    claudeBtn.click();
+    root.querySelector('.t3c-mp-model-row')!.click();
+    await flush();
+    expect(setModelMock).toHaveBeenCalledWith('th-rpc', expect.any(String), expect.objectContaining({
+      instanceId: 'claudeAgent',
+      model: 'claude-sonnet-4-6',
+    }));
+
+    // Streaming + Stop button + inline approval card (without feedback box when supportsFeedback is false)
+    const streamingDetail: ThreadDetail = {
+      thread: { ...thread, status: 'waiting', pendingRequestCount: 1 },
+      messages: [
+        { id: 'm1', role: 'user', text: 'hi', streaming: false },
+        { id: 'm2', role: 'assistant', text: 'Streaming reply…', streaming: true },
+      ],
+      turnItems: [{ id: 'ti-1', type: 'command', title: 'npm test', status: 'running' }],
+      runtimeRequests: [{ id: 'req-1', threadId: 'th-rpc', kind: 'command', status: 'pending', command: 'echo ok', supportsFeedback: false }],
+      contextUsage: { status: 'available', usedTokens: 40_000, maxTokens: 100_000, percent: 40 },
+      activeRunId: 'run-live',
+      runIds: ['run-live'],
+      lastSequence: 11,
+      synchronized: true,
+    };
+    store.setThreadDetail('th-rpc', streamingDetail);
+    threadListener?.({ type: 'thread.detail', detail: streamingDetail });
+    await flush();
+
+    const stopBtn = root.querySelector('.t3c-stop-btn')!;
+    expect(stopBtn.hidden).toBe(false);
+    stopBtn.click();
+    await flush();
+    expect(stopMock).toHaveBeenCalledWith('th-rpc', expect.any(String), 'run-live');
+
+    expect(root.querySelector('.t3c-turn-pill')?.textContent).toContain('npm test');
+    expect(root.querySelector('.t3c-approval-card')).not.toBeNull();
+    expect(root.querySelector('.t3c-approval-feedback')).toBeNull();
+    const declineBtn = root.querySelector('.t3c-approval-actions')!.querySelectorAll('button').find(b => b.textContent === '拒绝')!;
+    declineBtn.click();
+    await flush();
+    expect(respondMock).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'req-1', decision: 'decline' }));
+
+    // Clear active run so send is enabled, then trigger UncertainWriteError -> keeps draft & retries idempotently
+    const idleDetail: ThreadDetail = { ...streamingDetail, thread: { ...thread, status: 'idle', pendingRequestCount: 0 }, runtimeRequests: [], activeRunId: undefined };
+    store.setThreadDetail('th-rpc', idleDetail);
+    threadListener?.({ type: 'thread.detail', detail: idleDetail });
+    await flush();
+
+    const draft = root.querySelector('.t3c-textarea')!;
+    draft.value = 'Critical prompt';
+    draft.dispatchEvent(new FakeEvent('input'));
+    root.querySelector('.t3c-send-btn')!.click();
+    await waitUntil(() => root.querySelector('.t3c-banner')?.hidden === false);
+    expect(draft.value).toBe('Critical prompt');
+
+    root.querySelector('.t3c-banner-actions')!.querySelector('button')!.click();
+    await waitUntil(() => draft.value === '');
+    expect(hasMessageOnServerMock).toHaveBeenCalled();
+
+    await view.onClose();
   });
 });

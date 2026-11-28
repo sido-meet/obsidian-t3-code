@@ -123,4 +123,17 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - [src/t3/rpc-backend.ts](../src/t3/rpc-backend.ts)：实现 `T3Backend` (`mode: 'rpc'`)，覆盖 `/api/auth/websocket-ticket/rpc`（含 `404` 降级）与 `401` 自动续期、`/api/orchestration/shell` 与 `orchestration.subscribeShell` / `subscribeServerConfig`、`openThread` 流式订阅及 `snapshot-required` HTTP 回落、指数退避+抖动重连与 `afterSequence` 追平；写路径实现 `thread.create` + `message.dispatch`（同 `commandId` 复用确定 `threadId`/`messageId` 并在断网抛出 `UncertainWriteError`）、`thread.stop`/`run.interrupt`、会话内切模型/权限/模式与受 `supportsFeedback` 约束的 `runtime-request.respond`。
   - [src/t3/backend-manager.ts](../src/t3/backend-manager.ts)：实现 RPC 优先 + 连接/协议失败自动切换 `CliBackend` 降级路由器、`pairWithCode` 内存配对连接、`retryPendingDispatch` 先查后重放及禁止通过 CLI 重放未确认 RPC 写入硬不变量。
   - 单元测试：[tests/vault-guard.test.ts](../tests/vault-guard.test.ts)（含临时目录 `junction`/`symlink` 穿透验证）、[tests/rpc-backend.test.ts](../tests/rpc-backend.test.ts)、[tests/backend-manager.test.ts](../tests/backend-manager.test.ts)。
-- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **23 个测试文件 / 103 条测试全过**（`vault-guard.ts` **100%** Stmts/Funcs/Lines、`store.ts` **100%**、`rpc.ts` **100%**），`main.js` 为 `60,192` 字节（`< 204,800`）。
+- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **23 个测试文件 / 107 条测试全过**（`vault-guard.ts` **100%** Stmts/Funcs/Lines、`store.ts` **100%**、`rpc.ts` **100%**），`main.js` 为 `60,192` 字节（`< 204,800`）。
+
+
+---
+
+## 2026-11-28 — M5 完成：设置扩展、动态能力模型与 V2 侧栏全能力接入
+
+- **状态**：已完成 M5（插件设置与内存配对码入口、`sidebar-model` 实时目录/用量/额度格式化、V2 侧栏全量解耦迁移至 `T3BackendManager` + `T3Store` 驱动）。
+- **核心改动**：
+  - [src/settings.ts](../src/settings.ts) & [src/settings-tab.ts](../src/settings-tab.ts) & [src/main.ts](../src/main.ts)：新增 `backendPreference`（`auto`/`cli`）与可选回环 `serverUrl` 设置项，新增仅内存有效的手动一次性配对码提交入口（提交后立即清空输入且绝不写入 `data.json`/Vault）；扩展设置变更侦测触发后端重载。
+  - [src/ui/sidebar-model.ts](../src/ui/sidebar-model.ts)：新增 `buildModelCatalogFromProviders`（兼容多 Agent、思考度信号条与布尔/扩展选项）、`formatContextUsage`、`formatQuotaSummary`（五态诚实渲染）及支持 `fallback-cli`/内联审批/未确认消息重试的 `resolveStatusBanner`。
+  - [src/ui/ObsidianT3CodeView.ts](../src/ui/ObsidianT3CodeView.ts) & [styles.css](../styles.css)：全面移除对 `CliChat`/`cliRunner` 的直接耦合，改为通过 `T3BackendManager` + `T3Store` 驱动；在保留零顶栏、`>= 600px` 双栏布局、多标签隔离、安全外部链接与框外笔记注脚基础上，接入实时多 Agent/模型发现与刷新、会话内模型切换、240° SVG 用量进度圆弧与真实 token 明细、交互式权限切换（Vault 重叠锁定 `approval-required`）、流式输出与 Stop 中断按钮、Tool Call 紧凑胶囊及受 `supportsFeedback` 约束的内联安全审批卡片。
+  - 单元测试：[tests/__mocks__/obsidian.ts](../tests/__mocks__/obsidian.ts)、[tests/input.test.ts](../tests/input.test.ts)、[tests/smoke.test.ts](../tests/smoke.test.ts)、[tests/sidebar-model.test.ts](../tests/sidebar-model.test.ts)、[tests/sidebar-view.test.ts](../tests/sidebar-view.test.ts)。
+- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` **23 个测试文件 / 107 条测试全过**（`sidebar-model.ts` **100%** Stmts/Branch/Funcs/Lines、`rpc.ts` **100%**、`store.ts` **100%**、`ObsidianT3CodeView.ts` **86.58%** Stmts），`main.js` 为 **`135,542` 字节**（`< 204,800` 字节上限，仍低于 M0 前基线 `192,306` 字节）。

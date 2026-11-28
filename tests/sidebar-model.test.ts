@@ -4,9 +4,12 @@ import {
   COMPACT_TOOLBAR_MAX_WIDTH,
   WIDE_LAYOUT_MIN_WIDTH,
   buildModelCatalog,
+  buildModelCatalogFromProviders,
   filterThreads,
+  formatContextUsage,
   formatElapsedMs,
   formatModelTrigger,
+  formatQuotaSummary,
   groupThreads,
   parseEffortLabel,
   resolveLayoutMode,
@@ -242,5 +245,192 @@ describe('sidebar-model session filtering, grouping, tabs, and silent banners', 
     expect(formatElapsedMs(-100)).toBe('耗时 00:00');
     expect(formatElapsedMs(33_000)).toBe('耗时 00:33');
     expect(formatElapsedMs(125_400)).toBe('耗时 02:05');
+  });
+
+  it('builds live catalog from server providers and formats real context usage, quotas, and RPC banners', () => {
+    const groups = buildModelCatalogFromProviders([
+      {
+        instanceId: 'disabled-one',
+        driver: 'cursor',
+        displayName: 'Cursor',
+        enabled: false,
+        installed: false,
+        status: 'disabled',
+        reportsContextWindow: false,
+        supportedRuntimeModes: [],
+        showInteractionModeToggle: false,
+        models: [],
+        quota: { status: 'unknown', windows: [] },
+      },
+      {
+        instanceId: 'codex',
+        driver: 'codex',
+        displayName: 'Codex',
+        enabled: true,
+        installed: true,
+        status: 'ready',
+        reportsContextWindow: true,
+        supportedRuntimeModes: ['approval-required'],
+        showInteractionModeToggle: true,
+        models: [
+          {
+            providerId: 'codex',
+            slug: 'gpt-6-astra',
+            name: 'GPT-6 Astra',
+            shortName: 'Astra',
+            isDefault: true,
+            reasoningOption: {
+              id: 'reasoningEffort',
+              type: 'select',
+              label: 'Reasoning',
+              currentValue: 'high',
+              options: [
+                { id: 'low', label: 'Low' },
+                { id: 'high', label: 'High', isDefault: true },
+                { id: 'custom-tier', label: 'CustomTier' },
+              ],
+            },
+            extraOptions: [{ id: 'fast', type: 'boolean', label: 'Fast' }],
+          },
+          {
+            providerId: 'codex',
+            slug: 'gpt-mini',
+            name: 'GPT Mini',
+            reasoningOption: {
+              id: 'effort',
+              type: 'select',
+              label: 'Reasoning',
+              options: [{ id: 'medium', label: 'Medium', isDefault: true }],
+            },
+            extraOptions: [],
+          },
+          {
+            providerId: 'codex',
+            slug: 'gpt-bare',
+            name: 'GPT Bare',
+            extraOptions: [],
+          },
+        ],
+        quota: { status: 'unsupported', reason: 'unsupported', windows: [] },
+      },
+      {
+        instanceId: 'warn',
+        driver: 'claudeAgent',
+        displayName: 'ClaudeWarn',
+        enabled: true,
+        installed: true,
+        status: 'warning',
+        reportsContextWindow: false,
+        supportedRuntimeModes: [],
+        showInteractionModeToggle: false,
+        models: [],
+        quota: { status: 'unknown', windows: [] },
+      },
+      {
+        instanceId: 'err-with-models',
+        driver: 'other',
+        displayName: 'Other',
+        enabled: true,
+        installed: true,
+        status: 'error',
+        reportsContextWindow: false,
+        supportedRuntimeModes: [],
+        showInteractionModeToggle: false,
+        models: [{ providerId: 'err-with-models', slug: 'm1', name: 'M1', extraOptions: [] }],
+        quota: { status: 'unknown', windows: [] },
+      },
+    ]);
+
+    expect(groups).toHaveLength(3);
+    expect(groups[0].models[0]).toMatchObject({
+      model: 'gpt-6-astra',
+      subtitle: 'Astra',
+      isDefault: true,
+      defaultSelection: { provider: 'codex', model: 'gpt-6-astra', option: 'reasoningEffort=high' },
+    });
+    expect(groups[0].models[0].efforts[2]).toMatchObject({ label: 'CustomTier', bars: 2 });
+    expect(groups[0].models[0].extraOptions).toHaveLength(1);
+    expect(groups[0].models[1].defaultSelection.option).toBe('effort=medium');
+    expect(groups[0].models[2].efforts).toEqual([]);
+
+    expect(formatModelTrigger(
+      { provider: 'codex', model: 'gpt-6-astra', option: 'reasoningEffort=high' },
+      { threadId: 't1', title: 'T1', status: 'idle', providerInstanceId: 'codex', model: 'gpt-6-astra' },
+    )).toEqual({ primary: 'codex · gpt-6-astra', secondary: 'High', full: 'codex · gpt-6-astra · High' });
+
+    expect(formatContextUsage(undefined)).toEqual({ shortLabel: '—', detailLines: ['当前会话暂无上下文窗口用量数据'] });
+    expect(formatContextUsage({
+      status: 'available',
+      usedTokens: 25_000,
+      maxTokens: 100_000,
+      inputTokens: 20_000,
+      cachedInputTokens: 5_000,
+      outputTokens: 5_000,
+      reasoningOutputTokens: 1_000,
+      percent: 25.4,
+    })).toEqual({
+      shortLabel: '25%',
+      percent: 25,
+      detailLines: [
+        '已用 25,000 / 100,000 tokens',
+        '输入 20,000（缓存 5,000）',
+        '输出 5,000（思考 1,000）',
+      ],
+    });
+    expect(formatContextUsage({ status: 'available', inputTokens: 10, outputTokens: 2 })).toEqual({
+      shortLabel: '0',
+      detailLines: ['已用 0 tokens', '输入 10', '输出 2'],
+    });
+    expect(formatContextUsage({ status: 'available', usedTokens: 4096 }).shortLabel).toBe('4096');
+
+    expect(formatQuotaSummary()).toEqual([{ label: '账号额度', value: '未知 / Provider 未提供' }]);
+    expect(formatQuotaSummary({ status: 'loading', windows: [] })).toEqual([{ label: '账号额度', value: '查询中…' }]);
+    expect(formatQuotaSummary({ status: 'error', reason: 'timeout', windows: [] })).toEqual([{ label: '账号额度', value: 'timeout' }]);
+    expect(formatQuotaSummary({ status: 'error', windows: [] })).toEqual([{ label: '账号额度', value: '额度查询失败' }]);
+    expect(formatQuotaSummary({ status: 'unsupported', reason: 'unsupported', windows: [] })).toEqual([
+      { label: '账号额度', value: '当前 Provider 暂不支持额度查询' },
+    ]);
+    expect(formatQuotaSummary({ status: 'unsupported', reason: 'plan disabled', windows: [] })).toEqual([
+      { label: '账号额度', value: 'plan disabled' },
+    ]);
+    expect(formatQuotaSummary({
+      status: 'available',
+      windows: [
+        { id: 'w1', kind: 'session', label: '5h Window', usedPercent: 42.3, resetsAt: '2026-11-28T08:30:00Z' },
+        { id: 'w2', kind: 'weekly', label: 'Weekly', usedPercent: 10 },
+      ],
+    })).toEqual([
+      { label: '5h Window', value: '42% · 重置 2026-11-28 08:30' },
+      { label: 'Weekly', value: '10%' },
+    ]);
+
+    expect(resolveStatusBanner({
+      ready: true,
+      checking: false,
+      blocksVaultSend: false,
+      hasUncertainDispatch: true,
+    })).toEqual({
+      tone: 'warning',
+      message: '上一条消息发送状态待确认，请点重试向服务端核对（不会重复发送）。',
+      showRetry: true,
+    });
+    expect(resolveStatusBanner({
+      ready: true,
+      checking: false,
+      blocksVaultSend: false,
+      supportsApprovals: true,
+      thread: { threadId: 't1', title: 'T', status: 'waiting', pendingRequestCount: 1 },
+    })).toBeNull();
+    expect(resolveStatusBanner({
+      ready: true,
+      checking: false,
+      blocksVaultSend: false,
+      connectionPhase: 'fallback-cli',
+      fallbackReason: 'RPC 离线',
+    })).toEqual({
+      tone: 'warning',
+      message: 'CLI 降级模式：RPC 离线',
+      showRetry: true,
+    });
   });
 });

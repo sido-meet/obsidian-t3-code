@@ -37,6 +37,20 @@ describe('T3-Codian plugin', () => {
     expect(plugin.manifest.id).toBe('t3-codian');
   });
 
+  it('normalizes new backendPreference and serverUrl fields without persisting secrets', async () => {
+    const { normalizeSettings } = await import('../src/settings');
+    expect(normalizeSettings(null)).toMatchObject({
+      serverUrl: '',
+      backendPreference: 'auto',
+    });
+    expect(normalizeSettings({ serverUrl: ' http://127.0.0.1:3773 ', backendPreference: 'cli' })).toMatchObject({
+      serverUrl: 'http://127.0.0.1:3773',
+      backendPreference: 'cli',
+    });
+    const plugin = new ObsidianT3CodePlugin(new App(), manifest);
+    await expect(plugin.pairWithCode('abc')).rejects.toThrow('先在右侧栏打开');
+  });
+
   it('completes onload without throwing', async () => {
     const plugin = new ObsidianT3CodePlugin(new App(), manifest);
 

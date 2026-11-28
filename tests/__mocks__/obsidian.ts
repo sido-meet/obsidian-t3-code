@@ -160,7 +160,43 @@ export class Plugin {
 }
 
 export class PluginSettingTab {
+  containerEl: HTMLElement = { empty: () => undefined } as unknown as HTMLElement;
   constructor(public app: App, public plugin: Plugin) {}
+}
+
+export class Setting {
+  constructor(public containerEl: HTMLElement) {}
+  setName(_name: string): this { return this; }
+  setDesc(_desc: string): this { return this; }
+  addText(cb: (comp: { inputEl: HTMLInputElement; setValue(v: string): unknown; setPlaceholder(p: string): unknown; onChange(fn: (v: string) => void): unknown }) => void): this {
+    const comp = {
+      inputEl: { type: 'text' } as HTMLInputElement,
+      setValue() { return comp; },
+      setPlaceholder() { return comp; },
+      onChange() { return comp; },
+    };
+    cb(comp);
+    return this;
+  }
+  addTextArea(cb: (comp: { setValue(v: string): unknown; onChange(fn: (v: string) => void): unknown }) => void): this {
+    const comp = { setValue() { return comp; }, onChange() { return comp; } };
+    cb(comp);
+    return this;
+  }
+  addDropdown(cb: (comp: { addOption(k: string, l: string): unknown; setValue(v: string): unknown; onChange(fn: (v: string) => void): unknown }) => void): this {
+    const comp = {
+      addOption() { return comp; },
+      setValue() { return comp; },
+      onChange() { return comp; },
+    };
+    cb(comp);
+    return this;
+  }
+  addButton(cb: (comp: { setButtonText(t: string): unknown; setDisabled(d: boolean): unknown; onClick(fn: () => void): unknown }) => void): this {
+    const comp = { setButtonText() { return comp; }, setDisabled() { return comp; }, onClick() { return comp; } };
+    cb(comp);
+    return this;
+  }
 }
 
 export class FileSystemAdapter {

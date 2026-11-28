@@ -4,29 +4,45 @@ import { Component, FileSystemAdapter, FuzzySuggestModal, ItemView, MarkdownView
 import type { TFile, WorkspaceLeaf } from 'obsidian';
 import type ObsidianT3CodePlugin from '../main';
 import { composePrompt } from '../context';
-import { CliChat, cliRunner } from '../t3/cli';
-import type { CliThread, ModelSelection } from '../t3/cli';
 import { configuredModels } from '../settings';
+import { redactSensitiveText } from '../t3/auth';
+import {
+  CLI_BACKEND_CAPABILITIES,
+  type BackendModelSelection,
+  type ContextUsageSnapshot,
+  type RuntimeRequestItem,
+  type ThreadDetail,
+  type TurnItemSummary,
+} from '../t3/backend';
+import { T3BackendManager } from '../t3/backend-manager';
+import type { CliThread, ModelSelection } from '../t3/cli';
+import { UncertainWriteError } from '../t3/rpc-backend';
+import type { T3StoreState } from '../t3/store';
+import type { Message } from '../t3/transcript';
 import { resolveWorkspacePath, workspacesOverlap } from '../t3/workspace';
 import { renderSafeMarkdown } from './markdown';
 import { composeAttachments } from './note-attachments';
-import type { Message } from '../t3/transcript';
 import {
   ACTIVE_THREAD_STATUSES,
   buildModelCatalog,
+  buildModelCatalogFromProviders,
   filterThreads,
+  formatContextUsage,
   formatElapsedMs,
   formatModelTrigger,
+  formatQuotaSummary,
   groupThreads,
   resolveLayoutMode,
   resolveStatusBanner,
   resolveTabBadgeStatus,
+  type ModelCatalogItem,
   type SessionGroupMode,
 } from './sidebar-model';
 
 export const VIEW_TYPE_OBSIDIAN_T3_CODE = 'obsidian-t3-code-chat-view';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const GAUGE_ARC_LENGTH = 23.88;
 const MIN_WIDE_SIDEBAR_WIDTH = 180;
 const MIN_CHAT_COL_WIDTH = 320;
 const RESIZER_WIDTH = 5;
@@ -53,18 +69,23 @@ interface SidebarTab {
   threadId?: string;
   thread?: CliThread;
   selection?: ModelSelection;
+  extraOptions: Record<string, string | boolean>;
   draft: string;
   notes: TFile[];
   messages: Message[];
+  turnItems: TurnItemSummary[];
+  runtimeRequests: RuntimeRequestItem[];
+  contextUsage?: ContextUsageSnapshot;
+  activeRunId?: string;
+  uncertainCommandId?: string;
   unread: boolean;
   checking: boolean;
   busy: boolean;
   submitting: boolean;
   runStartedAt?: number;
   lastElapsedMs?: number;
-  controller?: AbortController;
-  poll?: ReturnType<typeof setTimeout>;
-  chat?: CliChat;
+  threadSub?: { unsubscribe: () => void };
+  pendingFeedback: Map<string, string>;
   selectionRevision: number;
 }
 
@@ -79,6 +100,8 @@ interface RowEntry {
   lastRenderedText?: string;
 }
 
+export type BackendManagerFactory = (plugin: ObsidianT3CodePlugin) => T3BackendManager;
+
 export default class ObsidianT3CodeView extends ItemView {
   private readonly rows = new Map<string, RowEntry>();
   private tabs: SidebarTab[] = [];
@@ -86,7 +109,8 @@ export default class ObsidianT3CodeView extends ItemView {
   private nextTabNumber = 1;
   private visible = false;
   private ready = false;
-  private connectionError?: string;
+  private workspaceValidated = false;
+  private actionError?: string;
   private backendRevision = 0;
   private cachedThreads: CliThread[] = [];
   private threadsLoaded = false;
@@ -97,6 +121,17 @@ export default class ObsidianT3CodeView extends ItemView {
   private modelFilterQuery = '';
   private openPopover: 'history' | 'model' | 'usage' | 'perm' | null = null;
   private wideSearchVisible = false;
+
+  private backendManager?: T3BackendManager;
+  private storeUnsub?: () => void;
+  private storeState: T3StoreState = {
+    connectionPhase: 'idle',
+    capabilities: { ...CLI_BACKEND_CAPABILITIES },
+    providers: [],
+    threads: [],
+    activeThreadDetails: new Map(),
+    pendingDispatches: new Map(),
+  };
 
   private resizeObserver?: ResizeObserver;
   private elapsedTimer?: ReturnType<typeof setInterval>;
@@ -114,6 +149,8 @@ export default class ObsidianT3CodeView extends ItemView {
 
   private welcomeEl!: HTMLElement;
   private messagesEl!: HTMLElement;
+  private turnItemsEl!: HTMLElement;
+  private approvalAreaEl!: HTMLElement;
   private runIndicatorEl!: HTMLElement;
   private navRailEl!: HTMLElement;
   private tabBadgesEl!: HTMLElement;
@@ -131,12 +168,14 @@ export default class ObsidianT3CodeView extends ItemView {
   private contextTrayEl!: HTMLElement;
   private draftEl!: HTMLTextAreaElement;
   private sendBtn!: HTMLButtonElement;
+  private stopBtn!: HTMLButtonElement;
   private modelChipBtn!: HTMLButtonElement;
   private modelIconEl!: HTMLElement;
   private modelPrimaryEl!: HTMLElement;
   private modelSecondaryEl!: HTMLElement;
   private modelPopover!: HTMLElement;
   private usageChipBtn!: HTMLButtonElement;
+  private usageArcEl!: SVGPathElement;
   private usageLabelEl!: HTMLElement;
   private usagePopover!: HTMLElement;
   private permChipBtn!: HTMLButtonElement;
@@ -146,13 +185,35 @@ export default class ObsidianT3CodeView extends ItemView {
   private noteFooterBtn!: HTMLButtonElement;
   private noteFooterLabelEl!: HTMLElement;
 
-  constructor(leaf: WorkspaceLeaf, private readonly plugin: ObsidianT3CodePlugin) { super(leaf); }
+  constructor(
+    leaf: WorkspaceLeaf,
+    private readonly plugin: ObsidianT3CodePlugin,
+    private readonly createBackendManager?: BackendManagerFactory,
+  ) {
+    super(leaf);
+  }
 
   getViewType(): string { return VIEW_TYPE_OBSIDIAN_T3_CODE; }
   getDisplayText(): string { return 'T3-Codian'; }
 
+  private ensureManager(): T3BackendManager {
+    if (!this.backendManager) {
+      this.backendManager = this.createBackendManager?.(this.plugin) ?? new T3BackendManager({
+        getSettings: () => this.plugin.settings,
+      });
+    }
+    return this.backendManager;
+  }
+
   private get activeTab(): SidebarTab {
     return this.tabs.find(tab => tab.id === this.activeTabId) ?? this.tabs[0];
+  }
+
+  private getModelGroups() {
+    if (this.storeState.capabilities.supportsLiveCatalog && this.storeState.providers.length > 0) {
+      return buildModelCatalogFromProviders(this.storeState.providers);
+    }
+    return buildModelCatalog(configuredModels(this.plugin.settings));
   }
 
   private createTab(seed?: { draft?: string; notes?: TFile[]; selection?: ModelSelection }): SidebarTab {
@@ -162,35 +223,24 @@ export default class ObsidianT3CodeView extends ItemView {
       id: `tab-${num}`,
       badgeNumber: num,
       selection: defaultSel,
+      extraOptions: {},
       draft: seed?.draft ?? '',
       notes: seed?.notes ? [...seed.notes] : [],
       messages: [],
+      turnItems: [],
+      runtimeRequests: [],
       unread: false,
       checking: false,
       busy: false,
       submitting: false,
+      pendingFeedback: new Map(),
       selectionRevision: 0,
     };
   }
 
-  private ensureTabChat(tab: SidebarTab): CliChat {
-    if (!tab.controller || tab.controller.signal.aborted) {
-      tab.controller = new AbortController();
-      tab.chat = new CliChat(cliRunner(this.plugin.settings.cliPath, tab.controller.signal));
-    }
-    if (!tab.chat) {
-      tab.chat = new CliChat(cliRunner(this.plugin.settings.cliPath, tab.controller.signal));
-    }
-    if (tab.threadId) tab.chat.threadId = tab.threadId;
-    return tab.chat;
-  }
-
   private abortTab(tab: SidebarTab): void {
-    clearTimeout(tab.poll);
-    tab.poll = undefined;
-    tab.controller?.abort();
-    tab.controller = undefined;
-    tab.chat = undefined;
+    tab.threadSub?.unsubscribe();
+    tab.threadSub = undefined;
   }
 
   private isStaleTab(tab: SidebarTab, rev: number, selectionRevision: number): boolean {
@@ -202,6 +252,11 @@ export default class ObsidianT3CodeView extends ItemView {
 
   async onOpen(): Promise<void> {
     this.visible = true;
+    const manager = this.ensureManager();
+    this.storeState = manager.store.getSnapshot();
+    this.storeUnsub?.();
+    this.storeUnsub = manager.store.subscribe(state => this.handleStoreUpdate(state));
+
     const root = this.contentEl;
     this.rootEl = root;
     root.empty();
@@ -235,9 +290,71 @@ export default class ObsidianT3CodeView extends ItemView {
     this.stopResize();
     clearInterval(this.elapsedTimer);
     this.elapsedTimer = undefined;
+    this.storeUnsub?.();
+    this.storeUnsub = undefined;
     for (const tab of this.tabs) this.abortTab(tab);
     for (const entry of this.rows.values()) this.disposeRow(entry);
     this.rows.clear();
+    await this.backendManager?.dispose();
+  }
+
+  async pairWithCode(code: string): Promise<void> {
+    const manager = this.ensureManager();
+    await manager.pairWithCode(code);
+    this.actionError = undefined;
+    await this.check();
+  }
+
+  private handleStoreUpdate(state: T3StoreState): void {
+    this.storeState = state;
+    this.cachedThreads = state.threads;
+    if (state.connectionPhase === 'connected-rpc' || state.connectionPhase === 'fallback-cli') {
+      this.threadsLoaded = true;
+      if (this.workspaceValidated) this.ready = true;
+    } else if (state.connectionPhase === 'disconnected') {
+      this.ready = false;
+    }
+
+    for (const tab of this.tabs) {
+      if (!tab.threadId) continue;
+      const summary = state.threads.find(t => t.threadId === tab.threadId);
+      if (summary) tab.thread = summary;
+      const detail = state.activeThreadDetails.get(tab.threadId);
+      if (detail) this.syncTabFromDetail(tab, detail);
+    }
+
+    if (!this.visible) return;
+    if (this.openPopover === 'model') this.renderModelPopover();
+    if (this.openPopover === 'usage') this.renderUsagePopover();
+    if (this.openPopover === 'perm') this.renderPermPopover();
+    this.updateRunTimer();
+    this.refreshControls();
+  }
+
+  private syncTabFromDetail(tab: SidebarTab, detail: ThreadDetail): void {
+    const wasBusy = tab.busy;
+    tab.thread = detail.thread;
+    tab.messages = detail.messages;
+    tab.turnItems = detail.turnItems;
+    tab.runtimeRequests = detail.runtimeRequests;
+    tab.contextUsage = detail.contextUsage;
+    tab.activeRunId = detail.activeRunId;
+    if (detail.thread.providerInstanceId && detail.thread.model && !tab.selection) {
+      tab.selection = { provider: detail.thread.providerInstanceId, model: detail.thread.model };
+    }
+    const activeByServer = ACTIVE_THREAD_STATUSES.has(detail.thread.status) || Boolean(detail.activeRunId);
+    tab.busy = tab.submitting || (!tab.uncertainCommandId && activeByServer);
+    if (tab.busy && !tab.runStartedAt) tab.runStartedAt = Date.now();
+    if (!tab.busy && wasBusy && tab.runStartedAt) {
+      tab.lastElapsedMs = Date.now() - tab.runStartedAt;
+      tab.runStartedAt = undefined;
+      if (tab !== this.activeTab) tab.unread = true;
+    }
+    if (tab === this.activeTab && this.visible) {
+      this.renderMessages(tab.messages);
+      this.renderTurnItems(tab.turnItems);
+      this.renderApprovalCards(tab);
+    }
   }
 
   private disposeRow(entry: RowEntry): void {
@@ -260,6 +377,10 @@ export default class ObsidianT3CodeView extends ItemView {
 
     this.messagesEl = wrap.createDiv({ cls: 't3c-messages', attr: { role: 'log', 'aria-live': 'off' } });
     this.messagesEl.hidden = true;
+    this.turnItemsEl = wrap.createDiv({ cls: 't3c-turn-items' });
+    this.turnItemsEl.hidden = true;
+    this.approvalAreaEl = wrap.createDiv({ cls: 't3c-approval-area' });
+    this.approvalAreaEl.hidden = true;
     this.runIndicatorEl = wrap.createDiv({ cls: 't3c-run-indicator' });
     this.runIndicatorEl.hidden = true;
 
@@ -313,7 +434,7 @@ export default class ObsidianT3CodeView extends ItemView {
     this.bannerEl.hidden = true;
     this.bannerTextEl = this.bannerEl.createSpan({ cls: 't3c-banner-text' });
     const bannerActions = this.bannerEl.createDiv({ cls: 't3c-banner-actions' });
-    this.bannerRetryBtn = this.button(bannerActions, '重试', () => this.check());
+    this.bannerRetryBtn = this.button(bannerActions, '重试', () => this.retryFromBanner());
     this.bannerLinkEl = bannerActions.createEl('a', { text: '在 T3 Code 中打开 ↗', attr: { target: '_blank', rel: 'noopener noreferrer' } });
 
     const dock = area.createDiv({ cls: 't3c-composer-dock' });
@@ -328,6 +449,9 @@ export default class ObsidianT3CodeView extends ItemView {
       placeholder: '提出修改要求、@ 提及笔记…',
       attr: { 'aria-label': '消息', rows: '2' },
     });
+    this.stopBtn = this.iconButton(taRow, 'square', '停止运行', () => this.stopCurrentRun());
+    this.stopBtn.addClass('t3c-stop-btn');
+    this.stopBtn.hidden = true;
     this.sendBtn = this.iconButton(taRow, 'arrow-up', '发送消息', () => this.send());
     this.sendBtn.addClass('t3c-send-btn');
 
@@ -357,16 +481,16 @@ export default class ObsidianT3CodeView extends ItemView {
       const next = !this.plugin.settings.includeNote;
       void this.plugin.updateSettings({ includeNote: next })
         .then(() => {
-          if (this.ready) this.connectionError = undefined;
+          if (this.ready) this.actionError = undefined;
           this.refreshControls();
         })
-        .catch(() => this.setConnectionError('无法保存笔记上下文选项。'));
+        .catch(() => this.setActionError('无法保存笔记上下文选项。'));
     };
 
     this.draftEl.oninput = () => {
       this.activeTab.draft = this.draftEl.value;
-      if (this.ready && this.connectionError) {
-        this.connectionError = undefined;
+      if (this.ready && this.actionError) {
+        this.actionError = undefined;
         this.refreshBanner();
       }
       this.refreshSendButton();
@@ -528,6 +652,22 @@ export default class ObsidianT3CodeView extends ItemView {
     track.setAttribute('stroke-width', '2');
     track.setAttribute('stroke-linecap', 'round');
     svg.appendChild(track);
+
+    const arc = parent.ownerDocument.createElementNS(SVG_NS, 'path') as unknown as SVGPathElement;
+    arc.setAttribute('d', 'M 3.05 11 A 5.7 5.7 0 1 1 12.95 11');
+    arc.setAttribute('fill', 'none');
+    arc.setAttribute('stroke', 'currentColor');
+    arc.setAttribute('stroke-width', '2');
+    arc.setAttribute('stroke-linecap', 'round');
+    arc.setAttribute('stroke-dasharray', String(GAUGE_ARC_LENGTH));
+    arc.setAttribute('stroke-dashoffset', String(GAUGE_ARC_LENGTH));
+    (arc as unknown as { classList?: { add(...c: string[]): void }; addClass?: (...c: string[]) => void }).addClass?.('t3c-usage-arc');
+    if (typeof (arc as unknown as HTMLElement).setAttribute === 'function') {
+      arc.setAttribute('class', 't3c-usage-arc');
+    }
+    (arc as unknown as { hidden: boolean }).hidden = true;
+    svg.appendChild(arc);
+    this.usageArcEl = arc;
     parent.appendChild(svg);
   }
 
@@ -535,7 +675,7 @@ export default class ObsidianT3CodeView extends ItemView {
     const button = parent.createEl('button', { text, type: 'button' });
     button.onclick = () => {
       void Promise.resolve().then(action).catch(error => {
-        this.setConnectionError(error instanceof Error ? error.message : '操作失败。');
+        this.setActionError(redactSensitiveText(error instanceof Error ? error.message : '操作失败。'));
       });
     };
     return button;
@@ -546,14 +686,14 @@ export default class ObsidianT3CodeView extends ItemView {
     setIcon(button, icon);
     button.onclick = () => {
       void Promise.resolve().then(action).catch(error => {
-        this.setConnectionError(error instanceof Error ? error.message : '操作失败。');
+        this.setActionError(redactSensitiveText(error instanceof Error ? error.message : '操作失败。'));
       });
     };
     return button;
   }
 
-  private setConnectionError(message?: string): void {
-    this.connectionError = message;
+  private setActionError(message?: string): void {
+    this.actionError = message;
     this.refreshControls();
   }
 
@@ -561,7 +701,8 @@ export default class ObsidianT3CodeView extends ItemView {
     if (!this.visible) return;
     this.backendRevision++;
     this.ready = false;
-    this.connectionError = undefined;
+    this.workspaceValidated = false;
+    this.actionError = undefined;
     this.vaultOverlapCache = undefined;
     this.cachedThreads = [];
     this.threadsLoaded = false;
@@ -575,6 +716,13 @@ export default class ObsidianT3CodeView extends ItemView {
       tab.threadId = undefined;
       tab.thread = undefined;
       tab.messages = [];
+      tab.turnItems = [];
+      tab.runtimeRequests = [];
+      tab.contextUsage = undefined;
+      tab.activeRunId = undefined;
+      tab.uncertainCommandId = undefined;
+      tab.extraOptions = {};
+      tab.pendingFeedback.clear();
       tab.unread = false;
       tab.runStartedAt = undefined;
       tab.lastElapsedMs = undefined;
@@ -586,6 +734,7 @@ export default class ObsidianT3CodeView extends ItemView {
   }
 
   modelsChanged(): void {
+    if (this.storeState.capabilities.supportsLiveCatalog && this.storeState.providers.length > 0) return;
     const entries = configuredModels(this.plugin.settings);
     for (const tab of this.tabs) {
       if (!tab.threadId) tab.selection = entries[0];
@@ -632,6 +781,8 @@ export default class ObsidianT3CodeView extends ItemView {
     this.draftEl.value = tab.draft;
     this.renderAttachments();
     this.renderMessages(tab.messages);
+    this.renderTurnItems(tab.turnItems);
+    this.renderApprovalCards(tab);
     this.updateRunTimer();
     this.refreshControls();
   }
@@ -652,7 +803,8 @@ export default class ObsidianT3CodeView extends ItemView {
       this.historySearchInput.focus();
     } else if (target === 'model') {
       this.modelFilterQuery = '';
-      this.browseProvider = this.activeTab.selection?.provider ?? configuredModels(this.plugin.settings)[0]?.provider ?? '';
+      const activeThreadSel = this.activeTab.threadId ? this.activeTab.thread?.providerInstanceId : undefined;
+      this.browseProvider = activeThreadSel ?? this.activeTab.selection?.provider ?? this.getModelGroups()[0]?.provider ?? '';
       this.modelPopover.hidden = false;
       this.modelChipBtn.addClass('is-open');
       this.modelChipBtn.setAttribute('aria-expanded', 'true');
@@ -668,7 +820,9 @@ export default class ObsidianT3CodeView extends ItemView {
       this.permChipBtn.addClass('is-open');
       this.permChipBtn.setAttribute('aria-expanded', 'true');
       this.renderPermPopover();
-      (this.permPopover.querySelector('a') as HTMLElement | null ?? this.permPopover).focus();
+      (this.permPopover.querySelector('button') as HTMLElement | null
+        ?? this.permPopover.querySelector('a') as HTMLElement | null
+        ?? this.permPopover).focus();
     }
   }
 
@@ -709,13 +863,13 @@ export default class ObsidianT3CodeView extends ItemView {
     const rev = this.backendRevision;
     const tab = this.activeTab;
     const selectionRevision = tab.selectionRevision;
-    const chat = this.ensureTabChat(tab);
     if (!force && this.threadsLoaded) {
       this.renderSessionLists();
       return;
     }
     try {
-      const list = await chat.list(await this.project(chat));
+      await this.resolveWorkspacePaths();
+      const list = await this.ensureManager().refreshThreads();
       if (!this.visible || rev !== this.backendRevision) return;
       this.cachedThreads = list;
       this.threadsLoaded = true;
@@ -757,6 +911,35 @@ export default class ObsidianT3CodeView extends ItemView {
     renderInto(this.wideListEl);
   }
 
+  private async attachThreadStream(tab: SidebarTab, threadId: string, rev: number, selectionRevision: number): Promise<void> {
+    this.abortTab(tab);
+    let initialError: string | undefined;
+    const sub = await this.ensureManager().openThread(threadId, event => {
+      if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      if (event.type === 'thread.detail') {
+        this.syncTabFromDetail(tab, event.detail);
+        this.updateRunTimer();
+        this.refreshControls();
+      } else if (event.type === 'error') {
+        initialError = event.message;
+        tab.busy = false;
+        tab.runStartedAt = undefined;
+        this.actionError = redactSensitiveText(event.message);
+        this.updateRunTimer();
+        this.refreshControls();
+      }
+    });
+    if (this.isStaleTab(tab, rev, selectionRevision)) {
+      sub.unsubscribe();
+      return;
+    }
+    if (initialError) {
+      sub.unsubscribe();
+      throw new Error(initialError);
+    }
+    tab.threadSub = sub;
+  }
+
   private async switchThread(thread?: CliThread, keepDraft = false): Promise<void> {
     const tab = this.activeTab;
     if (!this.ready || tab.submitting || tab.checking || (thread && thread.threadId === tab.threadId)) return;
@@ -775,24 +958,30 @@ export default class ObsidianT3CodeView extends ItemView {
     tab.draft = keepDraft ? currentDraft : '';
     tab.notes = keepDraft ? currentNotes : [];
     tab.messages = [];
+    tab.turnItems = [];
+    tab.runtimeRequests = [];
+    tab.contextUsage = undefined;
+    tab.activeRunId = undefined;
+    tab.uncertainCommandId = undefined;
     this.closePopovers(false);
     this.syncActiveTabUI();
     this.draftEl.focus();
     if (!thread) {
-      if (this.ready) this.setConnectionError(undefined);
+      if (this.ready) this.setActionError(undefined);
       this.renderSessionLists();
       return;
     }
-    const chat = this.ensureTabChat(tab);
     tab.checking = true;
     this.refreshControls();
     try {
-      await this.read(tab, chat, rev);
-      this.renderSessionLists();
+      await this.attachThreadStream(tab, thread.threadId, rev, selectionRevision);
+      if (!this.isStaleTab(tab, rev, selectionRevision)) {
+        this.renderSessionLists();
+      }
     } catch (error) {
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
       this.ready = false;
-      this.setConnectionError(error instanceof Error ? error.message : '无法恢复会话。');
+      this.setActionError(redactSensitiveText(error instanceof Error ? error.message : '无法恢复会话。'));
     } finally {
       if (rev === this.backendRevision) {
         tab.checking = false;
@@ -801,11 +990,56 @@ export default class ObsidianT3CodeView extends ItemView {
     }
   }
 
+  private toBackendModelSelection(sel: ModelSelection, extra: Record<string, string | boolean>): BackendModelSelection {
+    const options: Array<{ id: string; value: string | boolean }> = [];
+    if (sel.option) {
+      const sep = sel.option.indexOf('=');
+      if (sep > 0) {
+        options.push({ id: sel.option.slice(0, sep), value: sel.option.slice(sep + 1) });
+      }
+    }
+    for (const [id, value] of Object.entries(extra)) {
+      if (!options.some(o => o.id === id)) {
+        options.push({ id, value });
+      }
+    }
+    return {
+      instanceId: sel.provider,
+      model: sel.model,
+      ...(options.length > 0 ? { options } : {}),
+    };
+  }
+
+  private async applyModelSelection(tab: SidebarTab, nextSel: ModelSelection, nextExtra: Record<string, string | boolean>, focusKey: string): Promise<void> {
+    if (tab.threadId) {
+      await this.ensureManager().setModelSelection(tab.threadId, this.toBackendModelSelection(nextSel, nextExtra));
+      if (tab.thread) {
+        tab.thread = { ...tab.thread, providerInstanceId: nextSel.provider, model: nextSel.model };
+      }
+    }
+    tab.selection = nextSel;
+    tab.extraOptions = nextExtra;
+    this.renderModelPopover(focusKey);
+    this.refreshControls();
+  }
+
+  private getEffectiveTabSelection(tab: SidebarTab): ModelSelection | undefined {
+    if (tab.threadId && tab.thread?.providerInstanceId && tab.thread.model) {
+      const opt = tab.selection?.provider === tab.thread.providerInstanceId && tab.selection.model === tab.thread.model
+        ? tab.selection.option
+        : undefined;
+      return { provider: tab.thread.providerInstanceId, model: tab.thread.model, ...(opt ? { option: opt } : {}) };
+    }
+    return tab.selection;
+  }
+
   private renderModelPopover(focusTarget?: string): void {
     const panel = this.modelPopover;
     panel.empty();
     const tab = this.activeTab;
-    if (tab.threadId) {
+    const caps = this.storeState.capabilities;
+
+    if (tab.threadId && !caps.supportsMidThreadModelSwitch) {
       const locked = panel.createDiv({ cls: 't3c-mp-locked' });
       locked.createEl('strong', { text: '当前会话模型已固定' });
       locked.createEl('p', { text: '本机 CLI 在创建会话时设置 Agent 与模型，暂不支持在已有会话中切换。' });
@@ -821,9 +1055,8 @@ export default class ObsidianT3CodeView extends ItemView {
       return;
     }
 
-    const entries = configuredModels(this.plugin.settings);
-    const groups = buildModelCatalog(entries);
-    const activeSel = tab.selection ?? entries[0];
+    const groups = this.getModelGroups();
+    const activeSel = this.getEffectiveTabSelection(tab);
     if (!groups.some(g => g.provider === this.browseProvider)) {
       this.browseProvider = activeSel?.provider ?? groups[0]?.provider ?? '';
     }
@@ -831,9 +1064,10 @@ export default class ObsidianT3CodeView extends ItemView {
     let focusElement: HTMLElement | null = null;
     const agentsCol = panel.createDiv({ cls: 't3c-mp-agents', attr: { role: 'toolbar', 'aria-label': 'Agent 实例' } });
     for (const group of groups) {
+      const label = group.displayName ?? group.provider;
       const btn = agentsCol.createEl('button', {
         cls: 't3c-mp-agent-btn',
-        attr: { type: 'button', 'aria-label': group.provider, 'aria-pressed': String(group.provider === this.browseProvider), title: group.provider },
+        attr: { type: 'button', 'aria-label': group.provider, 'aria-pressed': String(group.provider === this.browseProvider), title: label },
       });
       setIcon(btn, group.provider.toLowerCase().includes('claude') ? 'sparkles' : 'cpu');
       btn.onclick = () => {
@@ -848,6 +1082,13 @@ export default class ObsidianT3CodeView extends ItemView {
     head.createSpan({ text: '模型' });
     const filterInput = head.createEl('input', { cls: 't3c-mp-filter', attr: { type: 'search', placeholder: '过滤…', 'aria-label': '过滤模型' } });
     filterInput.value = this.modelFilterQuery;
+    if (caps.supportsProviderRefresh) {
+      const refreshBtn = this.iconButton(head, 'refresh-cw', '刷新模型目录', async () => {
+        await this.ensureManager().refreshProviders();
+        this.renderModelPopover('refresh');
+      });
+      refreshBtn.addClass('t3c-mp-refresh');
+    }
     if (focusTarget === 'initial') focusElement = filterInput;
     const modelList = modelsCol.createDiv({ cls: 't3c-mp-list' });
 
@@ -858,18 +1099,20 @@ export default class ObsidianT3CodeView extends ItemView {
     effortsCol.createDiv({ cls: 't3c-mp-col-head', text: '思考' });
     const effortList = effortsCol.createDiv({ cls: 't3c-mp-list' });
 
+    const configuredEntries = configuredModels(this.plugin.settings);
     const renderModelsList = () => {
       modelList.empty();
       const group = groups.find(g => g.provider === this.browseProvider) ?? groups[0];
       const q = this.modelFilterQuery.trim().toLowerCase();
-      const models = (group?.models ?? []).filter(m => !q || `${m.model} ${m.subtitle}`.toLowerCase().includes(q));
+      const models = (group?.models ?? []).filter(m => !q || `${m.model} ${m.name ?? ''} ${m.subtitle}`.toLowerCase().includes(q));
       for (const item of models) {
         const isSelected = activeSel?.provider === item.provider && activeSel?.model === item.model;
-        const row = this.button(modelList, '', () => {
-          const hasBare = entries.some(e => e.provider === item.provider && e.model === item.model && !e.option);
-          tab.selection = hasBare ? item.defaultSelection : (item.efforts[0]?.selection ?? item.defaultSelection);
-          this.renderModelPopover(`model:${item.provider}:${item.model}`);
-          this.refreshControls();
+        const row = this.button(modelList, '', async () => {
+          const hasBare = caps.supportsLiveCatalog
+            ? Boolean(item.defaultSelection)
+            : configuredEntries.some(e => e.provider === item.provider && e.model === item.model && !e.option);
+          const nextSel = hasBare ? item.defaultSelection : (item.efforts[0]?.selection ?? item.defaultSelection);
+          await this.applyModelSelection(tab, nextSel, {}, `model:${item.provider}:${item.model}`);
         });
         row.addClass('t3c-mp-model-row');
         if (isSelected) row.addClass('is-selected');
@@ -887,15 +1130,15 @@ export default class ObsidianT3CodeView extends ItemView {
     renderModelsList();
 
     const activeGroup = groups.find(g => g.provider === activeSel?.provider);
-    const activeItem = activeGroup?.models.find(m => m.model === activeSel?.model);
-    if (activeItem && activeItem.efforts.length > 0) {
-      const hasBare = entries.some(e => e.provider === activeItem.provider && e.model === activeItem.model && !e.option);
+    const activeItem: ModelCatalogItem | undefined = activeGroup?.models.find(m => m.model === activeSel?.model);
+    if (activeItem && (activeItem.efforts.length > 0 || (activeItem.extraOptions?.length ?? 0) > 0)) {
+      const hasBare = !caps.supportsLiveCatalog && configuredEntries.some(
+        e => e.provider === activeItem.provider && e.model === activeItem.model && !e.option,
+      );
       if (hasBare) {
-        const defBtn = this.button(effortList, '默认', () => {
+        const defBtn = this.button(effortList, '默认', async () => {
           if (isBrowsingOtherAgent) return;
-          tab.selection = activeItem.defaultSelection;
-          this.renderModelPopover('effort:default');
-          this.refreshControls();
+          await this.applyModelSelection(tab, activeItem.defaultSelection, tab.extraOptions, 'effort:default');
         });
         defBtn.addClass('t3c-mp-effort-row');
         defBtn.disabled = isBrowsingOtherAgent;
@@ -914,14 +1157,35 @@ export default class ObsidianT3CodeView extends ItemView {
         row.createSpan({ text: eff.label });
         row.onclick = () => {
           if (isBrowsingOtherAgent) return;
-          tab.selection = eff.selection;
-          this.renderModelPopover(`effort:${eff.option}`);
-          this.refreshControls();
+          void this.applyModelSelection(tab, eff.selection, tab.extraOptions, `effort:${eff.option}`)
+            .catch(err => this.setActionError(redactSensitiveText(err instanceof Error ? err.message : '切换思考度失败。')));
         };
         if (focusTarget === `effort:${eff.option}` && !row.disabled) focusElement = row;
       }
+
+      if (activeItem.extraOptions?.length) {
+        const extraWrap = effortList.createDiv({ cls: 't3c-mp-extra' });
+        for (const opt of activeItem.extraOptions) {
+          if (opt.type === 'boolean') {
+            const currentVal = typeof tab.extraOptions[opt.id] === 'boolean'
+              ? Boolean(tab.extraOptions[opt.id])
+              : Boolean(opt.currentValue);
+            const optBtn = this.button(extraWrap, `${opt.label}: ${currentVal ? '开' : '关'}`, async () => {
+              if (isBrowsingOtherAgent || !activeSel) return;
+              const nextExtra = { ...tab.extraOptions, [opt.id]: !currentVal };
+              await this.applyModelSelection(tab, activeSel, nextExtra, `extra:${opt.id}`);
+            });
+            optBtn.addClass('t3c-mp-extra-btn');
+            optBtn.disabled = isBrowsingOtherAgent;
+            if (currentVal) optBtn.addClass('is-selected');
+          }
+        }
+      }
     } else {
-      effortList.createEl('p', { cls: 't3c-empty-msg', text: entries.length <= 1 ? '可在设置添加模型与思考预设' : '当前模型无思考选项' });
+      effortList.createEl('p', {
+        cls: 't3c-empty-msg',
+        text: caps.supportsLiveCatalog ? '当前模型无思考选项' : '可在设置添加模型与思考预设',
+      });
     }
     if (focusTarget) (focusElement ?? panel).focus();
   }
@@ -929,14 +1193,41 @@ export default class ObsidianT3CodeView extends ItemView {
   private renderUsagePopover(): void {
     const panel = this.usagePopover;
     panel.empty();
+    const tab = this.activeTab;
+    const caps = this.storeState.capabilities;
     panel.createEl('strong', { text: '上下文与账号额度' });
-    const ctxRow = panel.createDiv({ cls: 't3c-usage-section' });
-    ctxRow.createSpan({ text: '上下文窗口（当前会话）' });
-    ctxRow.createSpan({ cls: 't3c-muted-inline', text: 'CLI 暂未提供数据' });
-    const quotaRow = panel.createDiv({ cls: 't3c-usage-section' });
-    quotaRow.createSpan({ text: '账号额度（Provider 实例）' });
-    quotaRow.createSpan({ cls: 't3c-muted-inline', text: 'CLI 暂未提供数据' });
-    const link = this.safeThreadLink(this.activeTab.thread);
+
+    const ctxBlock = panel.createDiv({ cls: 't3c-usage-block' });
+    const ctxHead = ctxBlock.createDiv({ cls: 't3c-usage-section' });
+    ctxHead.createSpan({ text: '上下文窗口（当前会话）' });
+    if (!caps.supportsContextUsage) {
+      ctxHead.createSpan({ cls: 't3c-muted-inline', text: 'CLI 暂未提供数据' });
+    } else {
+      const ctxInfo = formatContextUsage(tab.contextUsage);
+      ctxHead.createSpan({ cls: 't3c-usage-val', text: ctxInfo.shortLabel });
+      for (const line of ctxInfo.detailLines) {
+        ctxBlock.createDiv({ cls: 't3c-muted-note', text: line });
+      }
+    }
+
+    const quotaBlock = panel.createDiv({ cls: 't3c-usage-block' });
+    const quotaHead = quotaBlock.createDiv({ cls: 't3c-usage-section' });
+    quotaHead.createSpan({ text: '账号额度（Provider 实例）' });
+    if (!caps.supportsQuotaUsage) {
+      quotaHead.createSpan({ cls: 't3c-muted-inline', text: 'CLI 暂未提供数据' });
+    } else {
+      const activeProviderId = this.getEffectiveTabSelection(tab)?.provider;
+      const provider = this.storeState.providers.find(p => p.instanceId === activeProviderId)
+        ?? this.storeState.providers.find(p => p.enabled && p.status === 'ready');
+      const entries = formatQuotaSummary(provider?.quota);
+      for (const entry of entries) {
+        const row = quotaBlock.createDiv({ cls: 't3c-usage-section' });
+        row.createSpan({ cls: 't3c-muted-inline', text: entry.label });
+        row.createSpan({ cls: 't3c-muted-inline', text: entry.value });
+      }
+    }
+
+    const link = this.safeThreadLink(tab.thread);
     if (link) {
       panel.createEl('a', { text: '在 T3 Code 中查看用量 ↗', href: link, attr: { target: '_blank', rel: 'noopener noreferrer' } });
     }
@@ -945,19 +1236,60 @@ export default class ObsidianT3CodeView extends ItemView {
   private renderPermPopover(): void {
     const panel = this.permPopover;
     panel.empty();
-    const currentMode = this.activeTab.thread?.runtimeMode;
+    const tab = this.activeTab;
+    const caps = this.storeState.capabilities;
+    const isOverlapping = this.vaultOverlapCache?.overlaps === true;
+    const currentMode = tab.thread?.runtimeMode ?? (isOverlapping ? 'approval-required' : undefined);
+    const activeProvider = this.storeState.providers.find(
+      p => p.instanceId === (tab.thread?.providerInstanceId ?? tab.selection?.provider),
+    );
+    const allowedModes = activeProvider?.supportedRuntimeModes.length
+      ? new Set(activeProvider.supportedRuntimeModes)
+      : undefined;
+
     panel.createEl('strong', { text: '运行权限' });
+    const canSwitch = caps.supportsRuntimeModeSwitch && Boolean(tab.threadId);
+
     for (const mode of RUNTIME_MODES) {
-      const row = panel.createDiv({ cls: 't3c-perm-row' });
-      if (mode.id === currentMode) row.addClass('is-current');
-      setIcon(row.createSpan({ cls: 't3c-perm-row-ico' }), mode.icon);
-      const copy = row.createDiv({ cls: 't3c-perm-row-copy' });
-      const head = copy.createDiv({ cls: 't3c-perm-row-title', text: mode.label });
-      if (mode.id === currentMode) head.createSpan({ cls: 't3c-perm-badge', text: '当前生效' });
-      copy.createDiv({ cls: 't3c-perm-row-desc', text: mode.description });
+      if (allowedModes && !allowedModes.has(mode.id)) continue;
+      const lockedByVault = isOverlapping && mode.id !== 'approval-required';
+      const isCurrent = mode.id === currentMode;
+
+      if (canSwitch) {
+        const btn = this.button(panel, '', async () => {
+          if (!tab.threadId) return;
+          await this.ensureManager().setRuntimeMode(tab.threadId, mode.id);
+          if (tab.thread) tab.thread = { ...tab.thread, runtimeMode: mode.id };
+          this.renderPermPopover();
+          this.refreshControls();
+        });
+        btn.addClass('t3c-perm-row', 'is-interactive');
+        if (isCurrent) btn.addClass('is-current');
+        btn.disabled = lockedByVault;
+        setIcon(btn.createSpan({ cls: 't3c-perm-row-ico' }), mode.icon);
+        const copy = btn.createDiv({ cls: 't3c-perm-row-copy' });
+        const head = copy.createDiv({ cls: 't3c-perm-row-title', text: mode.label });
+        if (isCurrent) head.createSpan({ cls: 't3c-perm-badge', text: '当前生效' });
+        if (lockedByVault) head.createSpan({ cls: 't3c-perm-badge', text: '知识库锁定' });
+        copy.createDiv({ cls: 't3c-perm-row-desc', text: mode.description });
+      } else {
+        const row = panel.createDiv({ cls: 't3c-perm-row' });
+        if (isCurrent) row.addClass('is-current');
+        setIcon(row.createSpan({ cls: 't3c-perm-row-ico' }), mode.icon);
+        const copy = row.createDiv({ cls: 't3c-perm-row-copy' });
+        const head = copy.createDiv({ cls: 't3c-perm-row-title', text: mode.label });
+        if (isCurrent) head.createSpan({ cls: 't3c-perm-badge', text: '当前生效' });
+        copy.createDiv({ cls: 't3c-perm-row-desc', text: mode.description });
+      }
     }
-    panel.createEl('p', { cls: 't3c-muted-note', text: '权限由 T3 Code 项目设置控制，侧栏仅显示实测状态。' });
-    const link = this.safeThreadLink(this.activeTab.thread);
+
+    panel.createEl('p', {
+      cls: 't3c-muted-note',
+      text: canSwitch
+        ? (isOverlapping ? '当前绑定知识库目录，已锁定仅允许「需要审批」。' : '点击可即时切换当前会话运行权限。')
+        : '权限由 T3 Code 项目设置控制，侧栏仅显示实测状态。',
+    });
+    const link = this.safeThreadLink(tab.thread);
     if (link) {
       panel.createEl('a', { text: '在 T3 Code 中调整权限 ↗', href: link, attr: { target: '_blank', rel: 'noopener noreferrer' } });
     }
@@ -968,13 +1300,13 @@ export default class ObsidianT3CodeView extends ItemView {
     return link && /^https:\/\/app\.t3\.codes\/threads\//i.test(link) ? link : undefined;
   }
 
-  private async project(chat: CliChat): Promise<string> {
+  private async resolveWorkspacePaths(): Promise<{ vaultPath: string; projectPath: string }> {
     const adapter = this.app.vault.adapter;
     if (!(adapter instanceof FileSystemAdapter)) throw new Error('无法取得当前知识库的本地目录。');
     const vaultPath = adapter.getBasePath();
-    const path = resolveWorkspacePath(this.plugin.settings.projectPath, vaultPath);
-    if (!isAbsolute(path)) throw new Error('请输入 T3 项目绝对路径。');
-    const [vault, workspace] = await Promise.all([realpath(vaultPath), realpath(path)])
+    const projectPath = resolveWorkspacePath(this.plugin.settings.projectPath, vaultPath);
+    if (!isAbsolute(projectPath)) throw new Error('请输入 T3 项目绝对路径。');
+    const [vault, workspace] = await Promise.all([realpath(vaultPath), realpath(projectPath)])
       .catch(() => { throw new Error('无法访问 T3 项目目录。'); });
     this.vaultOverlapCache = {
       vaultPath,
@@ -984,15 +1316,17 @@ export default class ObsidianT3CodeView extends ItemView {
     if (vault !== workspace && workspacesOverlap(vault, workspace)) {
       throw new Error('请使用当前知识库目录，或选择与知识库分离的项目。');
     }
-    const id = this.plugin.settings.projectId;
+    return { vaultPath, projectPath: workspace };
+  }
+
+  private validateCliProjectBinding(id: string): void {
     if (!/^[a-z0-9][a-z0-9._:-]*$/i.test(id)) {
       throw new Error('请在插件设置绑定当前目录在 T3 Code 中登记的项目 ID。');
     }
-    const threads = await chat.list(workspace);
+    const threads = this.ensureManager().store.getSnapshot().threads;
     if (threads.some(thread => thread.projectId !== id)) {
       throw new Error('当前目录解析到了其他项目。请核对已登记的项目根目录和项目 ID。');
     }
-    return id;
   }
 
   private async check(): Promise<void> {
@@ -1000,30 +1334,76 @@ export default class ObsidianT3CodeView extends ItemView {
     if (tab.checking || tab.busy) return;
     const rev = this.backendRevision;
     const selectionRevision = tab.selectionRevision;
-    const chat = this.ensureTabChat(tab);
+    const manager = this.ensureManager();
     tab.checking = true;
-    this.connectionError = undefined;
+    this.workspaceValidated = false;
+    this.actionError = undefined;
     this.refreshControls();
+
     try {
-      const projectId = await this.project(chat);
-      const list = await chat.list(projectId);
+      const { vaultPath } = await this.resolveWorkspacePaths();
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      if (this.plugin.settings.backendPreference === 'cli' && !/^[a-z0-9][a-z0-9._:-]*$/i.test(this.plugin.settings.projectId)) {
+        throw new Error('请在插件设置绑定当前目录在 T3 Code 中登记的项目 ID。');
+      }
+      await manager.connect(vaultPath, this.plugin.settings.projectPath, this.plugin.settings.projectId);
+      if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      if (manager.activeMode === 'cli') {
+        this.validateCliProjectBinding(this.plugin.settings.projectId);
+      }
+      this.workspaceValidated = true;
       this.ready = true;
-      this.connectionError = undefined;
-      this.cachedThreads = list;
+      this.actionError = undefined;
+      this.cachedThreads = manager.store.getSnapshot().threads;
       this.threadsLoaded = true;
       this.renderSessionLists();
-      if (tab.threadId) await this.read(tab, chat, rev);
+      if (tab.threadId) {
+        await this.attachThreadStream(tab, tab.threadId, rev, selectionRevision);
+      }
     } catch (error) {
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
+      this.workspaceValidated = false;
       this.ready = false;
-      this.connectionError = error instanceof Error ? error.message : '无法检查 T3 CLI。';
+      this.actionError = redactSensitiveText(error instanceof Error ? error.message : '无法检查 T3 连接。');
     } finally {
       if (rev === this.backendRevision) {
         tab.checking = false;
         if (this.visible && this.tabs.includes(tab)) this.refreshControls();
       }
     }
+  }
+
+  private async retryFromBanner(): Promise<void> {
+    const tab = this.activeTab;
+    if (tab.uncertainCommandId) {
+      const cmdId = tab.uncertainCommandId;
+      tab.checking = true;
+      this.refreshControls();
+      try {
+        const res = await this.ensureManager().retryPendingDispatch(cmdId);
+        tab.uncertainCommandId = undefined;
+        tab.threadId = res.threadId;
+        if (tab.draft.trim()) {
+          tab.draft = '';
+          if (tab === this.activeTab) this.draftEl.value = '';
+        }
+        tab.notes = [];
+        this.actionError = undefined;
+        await this.attachThreadStream(tab, res.threadId, this.backendRevision, tab.selectionRevision);
+        void this.ensureManager().refreshThreads();
+      } finally {
+        tab.checking = false;
+        this.refreshControls();
+      }
+      return;
+    }
+    await this.check();
+  }
+
+  private async stopCurrentRun(): Promise<void> {
+    const tab = this.activeTab;
+    if (!tab.threadId || !tab.busy) return;
+    await this.ensureManager().stopThread(tab.threadId, tab.activeRunId);
   }
 
   private note(): MarkdownView | undefined {
@@ -1072,8 +1452,7 @@ export default class ObsidianT3CodeView extends ItemView {
     if (!this.ready || tab.busy || tab.checking || !draft.trim() || this.threadBlocksSending(tab)) return;
     const rev = this.backendRevision;
     const selectionRevision = tab.selectionRevision;
-    const chat = this.ensureTabChat(tab);
-    this.connectionError = undefined;
+    this.actionError = undefined;
     tab.busy = true;
     tab.submitting = true;
     tab.runStartedAt = Date.now();
@@ -1086,8 +1465,10 @@ export default class ObsidianT3CodeView extends ItemView {
     const prompt = composePrompt(draft.trim(), view?.file ? {
       path: view.file.path, selection, body: selection.trim() ? '' : view.editor.getValue(),
     } : undefined);
+
+    const manager = this.ensureManager();
     try {
-      const projectId = await this.project(chat);
+      await this.resolveWorkspacePaths();
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
       const activeNote = this.note();
       const attachmentText = await Promise.all(notes.filter(file => file !== view?.file).map(async file => {
@@ -1096,9 +1477,26 @@ export default class ObsidianT3CodeView extends ItemView {
         return { path: file.path, text };
       }));
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
-      const runId = await chat.send(projectId, composeAttachments(prompt, attachmentText), tab.selection);
+
+      const modelSelection = tab.selection
+        ? this.toBackendModelSelection(tab.selection, tab.extraOptions)
+        : undefined;
+      const runtimeMode = tab.threadId
+        ? tab.thread?.runtimeMode
+        : (this.vaultOverlapCache?.overlaps ? 'approval-required' : undefined);
+      const result = await manager.sendMessage({
+        projectId: this.plugin.settings.projectId,
+        threadId: tab.threadId,
+        text: composeAttachments(prompt, attachmentText),
+        ...(modelSelection ? { modelSelection } : {}),
+        ...(runtimeMode ? { runtimeMode } : {}),
+        ...(tab.thread?.runtimeMode ? { knownRuntimeMode: tab.thread.runtimeMode } : {}),
+      });
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
-      tab.threadId = chat.threadId;
+
+      tab.uncertainCommandId = undefined;
+      const isNewThread = tab.threadId !== result.threadId;
+      tab.threadId = result.threadId;
       if (tab.draft === draft) {
         tab.draft = '';
         if (tab === this.activeTab) this.draftEl.value = '';
@@ -1106,14 +1504,23 @@ export default class ObsidianT3CodeView extends ItemView {
       tab.notes = tab.notes.filter(note => !notes.includes(note));
       if (tab === this.activeTab) this.renderAttachments();
       tab.submitting = false;
-      await this.read(tab, chat, rev, runId);
-      void this.refreshThreadList(true);
+
+      if (isNewThread || !tab.threadSub) {
+        await this.attachThreadStream(tab, result.threadId, rev, selectionRevision);
+      }
+      void manager.refreshThreads();
     } catch (error) {
       if (this.isStaleTab(tab, rev, selectionRevision)) return;
       tab.busy = false;
       tab.runStartedAt = undefined;
-      this.ready = false;
-      this.connectionError = error instanceof Error ? error.message : 'T3 CLI 请求失败。';
+      if (error instanceof UncertainWriteError) {
+        const latestPending = Array.from(manager.store.getSnapshot().pendingDispatches.values()).at(-1);
+        tab.uncertainCommandId = latestPending?.commandId;
+        this.actionError = redactSensitiveText(error.message);
+      } else {
+        if (manager.activeMode === 'cli') this.ready = false;
+        this.actionError = redactSensitiveText(error instanceof Error ? error.message : 'T3 请求失败。');
+      }
       this.refreshControls();
     } finally {
       if (rev === this.backendRevision) {
@@ -1126,39 +1533,64 @@ export default class ObsidianT3CodeView extends ItemView {
     }
   }
 
-  private async read(tab: SidebarTab, chat: CliChat, rev: number, expectedRun?: string, remaining = 15): Promise<void> {
-    const selectionRevision = tab.selectionRevision;
-    const snapshot = await chat.read();
-    if (!snapshot || this.isStaleTab(tab, rev, selectionRevision)) return;
-    tab.thread = snapshot.thread;
-    const pending = Boolean(expectedRun && expectedRun !== snapshot.latestRunId && !snapshot.runIds.includes(expectedRun) && remaining > 0);
-    const wasBusy = tab.busy;
-    tab.busy = ACTIVE_THREAD_STATUSES.has(snapshot.status) || pending;
-    if (tab.busy && !tab.runStartedAt) tab.runStartedAt = Date.now();
-    if (!tab.busy && wasBusy && tab.runStartedAt) {
-      tab.lastElapsedMs = Date.now() - tab.runStartedAt;
-      tab.runStartedAt = undefined;
-      if (tab !== this.activeTab) tab.unread = true;
+  private renderTurnItems(items: TurnItemSummary[]): void {
+    this.turnItemsEl.empty();
+    const visible = items.filter(i => i.type !== 'compaction').slice(-5);
+    this.turnItemsEl.hidden = visible.length === 0;
+    for (const item of visible) {
+      const pill = this.turnItemsEl.createSpan({ cls: 't3c-turn-pill' });
+      const title = item.title ?? item.type;
+      pill.setText(item.status ? `${title} · ${item.status}` : title);
+      if (item.detail) pill.title = item.detail;
     }
-    tab.messages = snapshot.messages;
-    this.connectionError = undefined;
-    if (tab === this.activeTab) {
-      this.renderMessages(tab.messages);
-    }
-    this.updateRunTimer();
-    this.refreshControls();
-    if (tab.busy) {
-      tab.poll = setTimeout(() => {
-        void this.read(tab, chat, rev, expectedRun, remaining - 1).catch(error => {
-          if (this.isStaleTab(tab, rev, selectionRevision)) return;
-          this.ready = false;
-          tab.busy = false;
-          tab.runStartedAt = undefined;
-          this.connectionError = error instanceof Error ? error.message : '无法更新会话。';
-          this.updateRunTimer();
-          this.refreshControls();
+  }
+
+  private renderApprovalCards(tab: SidebarTab): void {
+    this.approvalAreaEl.empty();
+    const caps = this.storeState.capabilities;
+    const pending = caps.supportsApprovals
+      ? tab.runtimeRequests.filter(req => req.status === 'pending')
+      : [];
+    this.approvalAreaEl.hidden = pending.length === 0;
+    for (const req of pending) {
+      const card = this.approvalAreaEl.createDiv({ cls: 't3c-approval-card', attr: { role: 'region', 'aria-label': '待确认审批' } });
+      card.createEl('strong', { cls: 't3c-approval-title', text: req.title ?? '需要运行审批' });
+      if (req.command) {
+        card.createEl('code', { cls: 't3c-approval-cmd', text: req.command });
+      }
+      if (req.detail) {
+        card.createEl('p', { cls: 't3c-muted-note', text: req.detail });
+      }
+
+      let feedbackInput: HTMLInputElement | undefined;
+      if (req.supportsFeedback) {
+        feedbackInput = card.createEl('input', {
+          cls: 't3c-approval-feedback',
+          attr: { type: 'text', placeholder: '可选：填写拒绝原因（仅拒绝时发送）…', 'aria-label': '审批拒绝原因' },
         });
-      }, 1600);
+        feedbackInput.value = tab.pendingFeedback.get(req.id) ?? '';
+        feedbackInput.oninput = () => {
+          if (feedbackInput) tab.pendingFeedback.set(req.id, feedbackInput.value);
+        };
+      }
+
+      const actions = card.createDiv({ cls: 't3c-approval-actions' });
+      const respond = async (decision: 'accept' | 'acceptForSession' | 'decline') => {
+        const feedback = decision === 'decline' && req.supportsFeedback
+          ? (tab.pendingFeedback.get(req.id) ?? feedbackInput?.value ?? '').trim()
+          : undefined;
+        await this.ensureManager().respondRuntimeRequest({
+          threadId: req.threadId,
+          requestId: req.id,
+          decision,
+          ...(feedback ? { feedback } : {}),
+        });
+        tab.pendingFeedback.delete(req.id);
+      };
+      const acceptBtn = this.button(actions, '允许一次', () => respond('accept'));
+      acceptBtn.addClass('t3c-solid-btn');
+      this.button(actions, '本会话允许', () => respond('acceptForSession'));
+      this.button(actions, '拒绝', () => respond('decline'));
     }
   }
 
@@ -1256,10 +1688,19 @@ export default class ObsidianT3CodeView extends ItemView {
     const tab = this.activeTab;
     const blocksVault = this.threadBlocksSending(tab);
     const safeLink = this.safeThreadLink(tab.thread);
+    const fallbackReason = this.storeState.connectionPhase === 'fallback-cli'
+      ? this.storeState.connectionError
+      : undefined;
+    const displayError = this.actionError
+      ?? (this.storeState.connectionPhase === 'disconnected' ? this.storeState.connectionError : undefined);
     const banner = resolveStatusBanner({
       ready: this.ready,
-      checking: tab.checking,
-      error: this.connectionError,
+      checking: tab.checking || this.storeState.connectionPhase === 'connecting',
+      error: displayError,
+      fallbackReason,
+      connectionPhase: this.storeState.connectionPhase,
+      supportsApprovals: this.storeState.capabilities.supportsApprovals,
+      hasUncertainDispatch: Boolean(tab.uncertainCommandId) || this.storeState.pendingDispatches.size > 0,
       blocksVaultSend: blocksVault,
       thread: tab.thread,
       safeLink,
@@ -1281,11 +1722,33 @@ export default class ObsidianT3CodeView extends ItemView {
     const tab = this.activeTab;
     const blocksVault = this.threadBlocksSending(tab);
     const hasDraft = Boolean(this.draftEl.value.trim());
-    this.sendBtn.hidden = !hasDraft;
+    const canStop = tab.busy && this.storeState.capabilities.supportsStop && Boolean(tab.threadId);
+    this.stopBtn.hidden = !canStop;
+    this.stopBtn.disabled = !canStop;
+    this.sendBtn.hidden = !hasDraft || canStop;
     this.sendBtn.disabled = !this.ready || tab.busy || tab.checking || !hasDraft || blocksVault;
     this.sendBtn.title = blocksVault ? '使用知识库目录时请在 T3 Code 中确认会话权限为需要审批。' : '发送';
     this.draftEl.readOnly = tab.submitting;
     this.contextTrayEl.querySelectorAll('button').forEach(chip => { chip.disabled = tab.submitting; });
+  }
+
+  private refreshUsageGauge(): void {
+    const info = formatContextUsage(this.activeTab.contextUsage);
+    this.usageLabelEl.setText(info.shortLabel);
+    const arcEl = this.usageArcEl as unknown as {
+      hidden: boolean;
+      setAttribute(k: string, v: string): void;
+      toggleClass?: (cls: string, force: boolean) => void;
+    };
+    if (info.percent === undefined || !this.storeState.capabilities.supportsContextUsage) {
+      arcEl.hidden = true;
+      return;
+    }
+    const clamped = Math.max(0, Math.min(100, info.percent));
+    arcEl.hidden = false;
+    arcEl.setAttribute('stroke-dashoffset', (GAUGE_ARC_LENGTH * (1 - clamped / 100)).toFixed(2));
+    arcEl.toggleClass?.('is-warn', clamped >= 75 && clamped < 90);
+    arcEl.toggleClass?.('is-danger', clamped >= 90);
   }
 
   private refreshControls(): void {
@@ -1309,13 +1772,14 @@ export default class ObsidianT3CodeView extends ItemView {
     const activeProvider = (tab.thread?.providerInstanceId ?? tab.selection?.provider ?? '').toLowerCase();
     setIcon(this.modelIconEl, activeProvider.includes('claude') ? 'sparkles' : 'cpu');
 
-    const modeMeta = RUNTIME_MODES.find(m => m.id === tab.thread?.runtimeMode);
+    const previewMode = tab.thread?.runtimeMode ?? (this.vaultOverlapCache?.overlaps ? 'approval-required' : undefined);
+    const modeMeta = RUNTIME_MODES.find(m => m.id === previewMode);
     setIcon(this.permIconEl, modeMeta?.icon ?? 'lock');
-    this.permLabelEl.setText(modeMeta?.shortLabel ?? (tab.thread?.runtimeMode ? '权限未知' : '权限'));
-    this.permChipBtn.toggleClass('is-alert', tab.thread?.runtimeMode === 'full-access');
+    this.permLabelEl.setText(modeMeta?.shortLabel ?? (previewMode ? '权限未知' : '权限'));
+    this.permChipBtn.toggleClass('is-alert', previewMode === 'full-access');
 
     this.refreshNoteFooter();
-    this.usageLabelEl.setText('—');
+    this.refreshUsageGauge();
     this.renderSessionLists();
   }
 
@@ -1356,8 +1820,6 @@ export default class ObsidianT3CodeView extends ItemView {
       entry.bodyEl?.setText(message.text);
       return entry;
     }
-    // Assistant row: if transitioning between streaming and finalized, rebuild actions once;
-    // during active streaming chunks keep DOM & action buttons stable and throttle Markdown rendering.
     if (!entry.bodyEl || entry.message.streaming !== message.streaming) {
       return this.createRow(message, entry);
     }
@@ -1390,14 +1852,14 @@ export default class ObsidianT3CodeView extends ItemView {
       const actions = row.createDiv({ cls: 't3c-msg-actions' });
       this.iconButton(actions, 'copy', '复制 Markdown', async () => {
         await navigator.clipboard.writeText(entry.message.text);
-        if (this.ready && this.connectionError) this.setConnectionError(undefined);
+        if (this.ready && this.actionError) this.setActionError(undefined);
         new Notice('已复制 Markdown。');
       });
       this.iconButton(actions, 'corner-down-left', '插入当前光标处', () => {
         const editor = this.note()?.editor;
         if (!editor) throw new Error('请先打开要插入内容的 Markdown 笔记。');
         editor.replaceRange(entry.message.text, editor.getCursor());
-        if (this.ready && this.connectionError) this.setConnectionError(undefined);
+        if (this.ready && this.actionError) this.setActionError(undefined);
       });
     }
     this.scheduleAssistantRender(entry, message.text, !message.streaming);

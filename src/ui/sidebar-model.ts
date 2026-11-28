@@ -1,3 +1,10 @@
+import type {
+  AccountQuotaSnapshot,
+  ConnectionPhase,
+  ContextUsageSnapshot,
+  ModelOptionDescriptor,
+  ProviderDescriptor,
+} from '../t3/backend';
 import type { CliThread, ModelSelection } from '../t3/cli';
 
 export const WIDE_LAYOUT_MIN_WIDTH = 600;
@@ -15,19 +22,26 @@ export interface EffortInfo {
 
 export interface EffortOption extends EffortInfo {
   option: string;
+  optionId?: string;
+  optionValue?: string;
   selection: ModelSelection;
 }
 
 export interface ModelCatalogItem {
   provider: string;
   model: string;
+  name?: string;
   subtitle: string;
+  isDefault?: boolean;
   defaultSelection: ModelSelection;
   efforts: EffortOption[];
+  extraOptions?: ModelOptionDescriptor[];
 }
 
 export interface AgentCatalogGroup {
   provider: string;
+  displayName?: string;
+  status?: ProviderDescriptor['status'];
   models: ModelCatalogItem[];
 }
 
@@ -115,6 +129,102 @@ export function buildModelCatalog(entries: readonly ModelSelection[]): AgentCata
   }));
 }
 
+/** Build live Agent · Model · Effort catalog from RPC `server.getConfig` providers. */
+export function buildModelCatalogFromProviders(providers: readonly ProviderDescriptor[]): AgentCatalogGroup[] {
+  return providers
+    .filter(p => p.enabled && (p.status === 'ready' || p.status === 'warning' || p.models.length > 0))
+    .map(provider => ({
+      provider: provider.instanceId,
+      displayName: provider.displayName,
+      status: provider.status,
+      models: provider.models.map(model => {
+        const reasoningOpt = model.reasoningOption;
+        const efforts: EffortOption[] = reasoningOpt?.options?.map(choice => {
+          const info = EFFORT_LEVEL_MAP[choice.id.toLowerCase()] ?? { label: choice.label, bars: 2 as const };
+          const optExpr = `${reasoningOpt.id}=${choice.id}`;
+          return {
+            option: optExpr,
+            optionId: reasoningOpt.id,
+            optionValue: choice.id,
+            label: info.label,
+            bars: info.bars,
+            selection: { provider: provider.instanceId, model: model.slug, option: optExpr },
+          };
+        }) ?? [];
+        const defaultOpt = reasoningOpt?.currentValue && typeof reasoningOpt.currentValue === 'string'
+          ? `${reasoningOpt.id}=${reasoningOpt.currentValue}`
+          : efforts.find((_, idx) => reasoningOpt?.options?.[idx]?.isDefault)?.option;
+        return {
+          provider: provider.instanceId,
+          model: model.slug,
+          name: model.name,
+          subtitle: model.shortName ?? provider.displayName,
+          ...(model.isDefault ? { isDefault: true } : {}),
+          defaultSelection: {
+            provider: provider.instanceId,
+            model: model.slug,
+            ...(defaultOpt ? { option: defaultOpt } : {}),
+          },
+          efforts,
+          ...(model.extraOptions.length > 0 ? { extraOptions: model.extraOptions } : {}),
+        };
+      }),
+    }));
+}
+
+/** Formats real context window usage for the 240° gauge label and details popover. */
+export function formatContextUsage(usage?: ContextUsageSnapshot): {
+  shortLabel: string;
+  percent?: number;
+  detailLines: string[];
+} {
+  if (!usage || usage.status !== 'available') {
+    return {
+      shortLabel: '—',
+      detailLines: ['当前会话暂无上下文窗口用量数据'],
+    };
+  }
+  const pct = usage.percent !== undefined ? Math.round(usage.percent) : undefined;
+  const shortLabel = pct !== undefined ? `${pct}%` : `${usage.usedTokens ?? 0}`;
+  const lines: string[] = [
+    `已用 ${(usage.usedTokens ?? 0).toLocaleString('en-US')}${usage.maxTokens ? ` / ${usage.maxTokens.toLocaleString('en-US')} tokens` : ' tokens'}`,
+  ];
+  if (usage.inputTokens !== undefined) {
+    lines.push(
+      `输入 ${usage.inputTokens.toLocaleString('en-US')}${usage.cachedInputTokens !== undefined ? `（缓存 ${usage.cachedInputTokens.toLocaleString('en-US')}）` : ''}`,
+    );
+  }
+  if (usage.outputTokens !== undefined) {
+    lines.push(
+      `输出 ${usage.outputTokens.toLocaleString('en-US')}${usage.reasoningOutputTokens !== undefined ? `（思考 ${usage.reasoningOutputTokens.toLocaleString('en-US')}）` : ''}`,
+    );
+  }
+  return { shortLabel, ...(pct !== undefined ? { percent: pct } : {}), detailLines: lines };
+}
+
+/** Formats account quota windows or honest unsupported/unknown states. */
+export function formatQuotaSummary(quota?: AccountQuotaSnapshot): Array<{ label: string; value: string }> {
+  if (!quota || quota.status === 'unknown') {
+    return [{ label: '账号额度', value: '未知 / Provider 未提供' }];
+  }
+  if (quota.status === 'loading') {
+    return [{ label: '账号额度', value: '查询中…' }];
+  }
+  if (quota.status === 'error') {
+    return [{ label: '账号额度', value: quota.reason || '额度查询失败' }];
+  }
+  if (quota.status === 'unsupported') {
+    return [{
+      label: '账号额度',
+      value: quota.reason === 'unsupported' || !quota.reason ? '当前 Provider 暂不支持额度查询' : quota.reason,
+    }];
+  }
+  return quota.windows.map(win => ({
+    label: win.label,
+    value: `${Math.round(win.usedPercent)}%${win.resetsAt ? ` · 重置 ${win.resetsAt.slice(0, 16).replace('T', ' ')}` : ''}`,
+  }));
+}
+
 /** Format the composer bottom bar `Agent · Model · Effort` trigger label. */
 export function formatModelTrigger(
   selection?: ModelSelection,
@@ -122,7 +232,11 @@ export function formatModelTrigger(
 ): { primary: string; secondary?: string; full: string } {
   if (thread) {
     const primary = [thread.providerInstanceId, thread.model].filter(Boolean).join(' · ') || 'Agent · 模型';
-    return { primary, full: primary };
+    const matchingSel = selection && selection.provider === thread.providerInstanceId && selection.model === thread.model
+      ? parseEffortLabel(selection.option)
+      : undefined;
+    if (!matchingSel) return { primary, full: primary };
+    return { primary, secondary: matchingSel.label, full: `${primary} · ${matchingSel.label}` };
   }
   if (!selection) {
     return { primary: 'Agent · 模型', full: 'Agent · 模型' };
@@ -221,6 +335,10 @@ export function resolveStatusBanner(input: {
   ready: boolean;
   checking: boolean;
   error?: string;
+  fallbackReason?: string;
+  connectionPhase?: ConnectionPhase;
+  supportsApprovals?: boolean;
+  hasUncertainDispatch?: boolean;
   blocksVaultSend: boolean;
   thread?: CliThread;
   safeLink?: string;
@@ -239,6 +357,13 @@ export function resolveStatusBanner(input: {
       showRetry: false,
     };
   }
+  if (input.hasUncertainDispatch) {
+    return {
+      tone: 'warning',
+      message: '上一条消息发送状态待确认，请点重试向服务端核对（不会重复发送）。',
+      showRetry: true,
+    };
+  }
   if (input.blocksVaultSend) {
     return {
       tone: 'warning',
@@ -247,7 +372,7 @@ export function resolveStatusBanner(input: {
       ...(input.safeLink ? { link: input.safeLink } : {}),
     };
   }
-  if (input.thread?.status === 'waiting' || (input.thread?.pendingRequestCount ?? 0) > 0) {
+  if (!input.supportsApprovals && (input.thread?.status === 'waiting' || (input.thread?.pendingRequestCount ?? 0) > 0)) {
     return {
       tone: 'warning',
       message: '等待处理，请在 T3 Code 中查看',
@@ -261,6 +386,13 @@ export function resolveStatusBanner(input: {
       message: '任务失败，请在 T3 Code 中查看详情',
       showRetry: false,
       ...(input.safeLink ? { link: input.safeLink } : {}),
+    };
+  }
+  if (input.connectionPhase === 'fallback-cli' && input.fallbackReason) {
+    return {
+      tone: 'warning',
+      message: `CLI 降级模式：${input.fallbackReason}`,
+      showRetry: true,
     };
   }
   return null;

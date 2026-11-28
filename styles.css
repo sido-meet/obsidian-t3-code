@@ -368,6 +368,15 @@
   color: var(--text-on-accent);
 }
 .t3c-send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.t3c-stop-btn {
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--background-modifier-error, var(--text-error));
+  color: var(--text-on-accent);
+}
+.t3c-usage-arc { color: var(--interactive-accent); transition: stroke-dashoffset 0.2s ease; }
+.t3c-usage-arc.is-warn { color: var(--text-warning); }
+.t3c-usage-arc.is-danger { color: var(--text-error); }
 
 /* 框内底栏 */
 .t3c-toolbar {
@@ -738,3 +747,66 @@
   white-space: nowrap;
 }
 .t3c-wide-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+
+/* 工具调用标签、内联安全审批卡片与扩展模型选项 */
+.t3c-turn-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 4px;
+}
+.t3c-turn-pill {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.t3c-approval-area { display: flex; flex-direction: column; gap: 6px; padding: 2px 4px; }
+.t3c-approval-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--text-warning);
+  background: var(--background-secondary);
+}
+.t3c-approval-title { font-size: var(--font-ui-small); color: var(--text-normal); }
+.t3c-approval-cmd {
+  display: block;
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: var(--background-primary);
+  font-size: var(--font-ui-smaller);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.t3c-approval-feedback { width: 100%; font-size: var(--font-ui-smaller); }
+.t3c-approval-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.t3c-usage-block { display: flex; flex-direction: column; gap: 3px; }
+.t3c-usage-val { font-weight: var(--font-semibold); color: var(--text-normal); }
+.t3c-perm-row.is-interactive { width: 100%; height: auto; text-align: left; border: 0; background: transparent; cursor: pointer; }
+.t3c-perm-row.is-interactive:disabled { opacity: 0.48; cursor: not-allowed; }
+.t3c-mp-refresh { width: 20px; height: 20px; padding: 0; }
+.t3c-mp-extra { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--background-modifier-border); display: flex; flex-direction: column; gap: 2px; }
+.t3c-mp-extra-btn {
+  width: 100%;
+  height: auto;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  box-shadow: none;
+  font-size: var(--font-ui-smaller);
+  text-align: left;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.t3c-mp-extra-btn.is-selected { background: var(--background-modifier-hover); color: var(--text-normal); }
