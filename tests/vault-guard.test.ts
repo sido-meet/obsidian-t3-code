@@ -7,7 +7,8 @@ import { VaultSafetyGuard } from '../src/t3/vault-guard';
 describe('VaultSafetyGuard', () => {
   it('blocks non-approval-required sends and privilege escalation when workspace overlaps Vault', async () => {
     const guard = new VaultSafetyGuard();
-    const ctx = { vaultPath: 'E:\\MockVault', projectWorkspacePath: 'E:\\MockVault\\notes' };
+    const mockVault = join(tmpdir(), 'mock-vault');
+    const ctx = { vaultPath: mockVault, projectWorkspacePath: join(mockVault, 'notes') };
 
     expect(await guard.isOverlapping(ctx.vaultPath, ctx.projectWorkspacePath)).toBe(true);
     await expect(guard.assertCanSend(ctx, 'approval-required')).resolves.toBeUndefined();
@@ -22,7 +23,7 @@ describe('VaultSafetyGuard', () => {
 
   it('allows any runtimeMode when workspace is disjoint from Vault', async () => {
     const guard = new VaultSafetyGuard();
-    const ctx = { vaultPath: 'E:\\MockVault', projectWorkspacePath: 'E:\\Code\\MyRepo' };
+    const ctx = { vaultPath: join(tmpdir(), 'mock-vault'), projectWorkspacePath: join(tmpdir(), 'code', 'my-repo') };
 
     expect(await guard.isOverlapping(ctx.vaultPath, ctx.projectWorkspacePath)).toBe(false);
     await expect(guard.assertCanSend(ctx, 'full-access')).resolves.toBeUndefined();

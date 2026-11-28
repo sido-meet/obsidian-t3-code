@@ -1,3 +1,4 @@
+import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   discoverCliPath,
@@ -105,22 +106,25 @@ describe('discovery', () => {
   });
 
   it('resolves T3CODE_HOME from env, validated .cmd launcher, or default home directory', () => {
-    expect(resolveT3Home(undefined, { env: { T3CODE_HOME: 'D:\\t3-home' } })).toBe('D:\\t3-home');
+    const customHome = resolve('/t3-home');
+    const mockHome = resolve('/alice');
+    expect(resolveT3Home(undefined, { env: { T3CODE_HOME: customHome } })).toBe(customHome);
     expect(resolveT3Home('C:\\Users\\Alice\\.t3\\bin\\t3.cmd', {
       env: {},
       existsFn: () => true,
       readFileFn: () => VALID_CMD_LINES.join('\n'),
     })).toBe('C:\\Users\\Alice\\.t3');
     expect(resolveT3Home('C:\\bad.cmd', {
-      homeDir: 'C:\\Users\\Alice',
+      homeDir: mockHome,
       env: {},
       existsFn: () => true,
       readFileFn: () => 'corrupt',
-    })).toBe('C:\\Users\\Alice\\.t3');
+    })).toBe(join(mockHome, '.t3'));
   });
 
   it('discovers local protocol v2 server and enforces PID liveness, JSON validity, and version checks', async () => {
-    const runtimePath = 'C:\\Users\\Alice\\.t3\\userdata\\server-runtime.json';
+    const mockHome = resolve('/alice');
+    const runtimePath = join(mockHome, '.t3', 'userdata', 'server-runtime.json');
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       environmentId: 'env-1',
       serverVersion: '0.1.13',
@@ -129,7 +133,7 @@ describe('discovery', () => {
     }), { status: 200 }));
 
     const server = await discoverLocalServer({}, {
-      homeDir: 'C:\\Users\\Alice',
+      homeDir: mockHome,
       env: {},
       existsFn: p => p === runtimePath,
       readFileFn: () => JSON.stringify({ pid: process.pid, origin: 'http://127.0.0.1:3773', serverVersion: '0.1.13' }),
@@ -145,14 +149,14 @@ describe('discovery', () => {
     });
 
     await expect(discoverLocalServer({}, {
-      homeDir: 'C:\\Users\\Alice',
+      homeDir: mockHome,
       env: {},
       existsFn: p => p === runtimePath,
       readFileFn: () => '{bad-json',
     })).rejects.toThrow('损坏');
 
     await expect(discoverLocalServer({}, {
-      homeDir: 'C:\\Users\\Alice',
+      homeDir: mockHome,
       env: {},
       existsFn: p => p === runtimePath,
       readFileFn: () => JSON.stringify({ pid: 999999, origin: 'http://127.0.0.1:3773' }),
@@ -173,7 +177,7 @@ describe('discovery', () => {
       orchestrationProtocolVersion: 2,
     }), { status: 200 }));
     await expect(discoverLocalServer({}, {
-      homeDir: 'C:\\Users\\Alice',
+      homeDir: mockHome,
       env: {},
       existsFn: p => p === runtimePath,
       readFileFn: () => JSON.stringify({ pid: process.pid, origin: 'http://127.0.0.1:3773', serverVersion: '0.1.13' }),
