@@ -12,7 +12,17 @@ describe('MVP input boundaries', () => {
 
   it('normalizes the configured paths without changing spaces in folder names', () => {
     expect(normalizeSettings({ cliPath: ' /opt/t3 ', projectPath: ' /data/Project A ' }))
-      .toEqual({ cliPath: '/opt/t3', projectPath: '/data/Project A', projectId: '', provider: 'codex', model: 'gpt-6-astra', modelPresets: '', includeNote: false });
+      .toEqual({
+        cliPath: '/opt/t3',
+        projectPath: '/data/Project A',
+        projectId: '',
+        provider: 'codex',
+        model: 'gpt-6-astra',
+        modelPresets: '',
+        includeNote: false,
+        serverUrl: '',
+        backendPreference: 'auto',
+      });
   });
   it('includes the selection ahead of the full note', () => {
     expect(composePrompt('Summarize', { path: 'Draft.md', selection: 'Chosen', body: 'Private remainder' }))
@@ -38,4 +48,26 @@ it('groups configured presets without inventing model support', () => {
     { provider: 'codex', model: 'gpt-base' },
     { provider: 'claude-work', model: 'sonnet', option: 'effort=high' },
   ]);
+});
+
+it('preserves all legacy V1/pre-RPC data.json fields losslessly when migrating settings', () => {
+  const legacyData = {
+    cliPath: 'C:\\Users\\Administrator\\.t3\\bin\\t3.cmd',
+    projectPath: '',
+    provider: 'codex',
+    model: 'minimax-cn/MiniMax-M3.1-Flash',
+    includeNote: true,
+    projectId: 'fc56c689-08d7-4d91-b13d-a58d330f3625',
+  };
+  expect(normalizeSettings(legacyData)).toEqual({
+    cliPath: 'C:\\Users\\Administrator\\.t3\\bin\\t3.cmd',
+    projectPath: '',
+    projectId: 'fc56c689-08d7-4d91-b13d-a58d330f3625',
+    provider: 'codex',
+    model: 'minimax-cn/MiniMax-M3.1-Flash',
+    modelPresets: '',
+    includeNote: true,
+    serverUrl: '',
+    backendPreference: 'auto',
+  });
 });

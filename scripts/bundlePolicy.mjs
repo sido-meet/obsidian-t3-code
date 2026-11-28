@@ -4,10 +4,10 @@ export const MAX_BUNDLE_BYTES = 200 * 1024;
  * Pure compliance policy for the built plugin bundle.
  * Returns one message per violation; an empty array means the bundle is compliant.
  *
- * @param {{ bundleText: string, sizeBytes: number, manifestVersion: string, packageVersion: string }} input
+ * @param {{ bundleText: string, sizeBytes: number, manifestVersion: string, packageVersion: string, releaseTag?: string }} input
  * @returns {string[]}
  */
-export function collectBundleViolations({ bundleText, sizeBytes, manifestVersion, packageVersion }) {
+export function collectBundleViolations({ bundleText, sizeBytes, manifestVersion, packageVersion, releaseTag }) {
   const violations = [];
 
   if (sizeBytes >= MAX_BUNDLE_BYTES) {
@@ -26,6 +26,10 @@ export function collectBundleViolations({ bundleText, sizeBytes, manifestVersion
     violations.push(
       `version mismatch: manifest.json is ${manifestVersion} but package.json is ${packageVersion}.`,
     );
+  }
+
+  if (releaseTag !== undefined && (releaseTag !== manifestVersion || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(releaseTag))) {
+    violations.push(`release tag "${releaseTag}" must match the manifest version "${manifestVersion}" in x.y.z format.`);
   }
 
   return violations;

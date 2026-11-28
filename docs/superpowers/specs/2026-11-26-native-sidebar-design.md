@@ -62,3 +62,21 @@
 2. 核对本机 T3 CLI 的 Agent 和模型目录、额度、有效权限、审批与运行状态契约。已支持的功能进入首个实现批次，缺失的能力作为 CLI 依赖记录。
 3. 按顶栏与会话、消息、输入区与附件、Agent 与模型、权限与审批、额度拆分实施。在 240、320、480 像素宽度检查浅色、深色主题，验证键盘可达、长消息不推挤输入区以及无数据状态。
 4. 用隔离 Vault 测试新旧会话、Agent 与模型参数、额度不可用、权限未知、审批失效以及复制和回写。验收通过后再部署到用户知识库。
+
+
+---
+
+## V2 架构演进与实现对齐（`feat/sidebar-v2-redesign`）
+
+本节记录在 V1 原生侧栏基础上落地实现的 V2 设计（核心代码：`src/ui/ObsidianT3CodeView.ts`、`src/ui/sidebar-model.ts`、`src/t3/cli.ts`、`styles.css`）：
+
+1. **零内部顶栏与异常专用横幅**：移除常驻顶部状态栏；CLI 健康连接期间保持静默（`.t3c-banner` 隐藏）。仅在断连报错、Vault 目录非 `approval-required` 权限拦截、会话处于 `waiting` / `pendingRequestCount > 0` 或运行 `failed`、以及已连接状态下同步操作失败时显示 `.t3c-banner`（外链经 `safeThreadLink` 严格限制为 `https://app.t3.codes/threads/...`）。
+2. **双形态响应式布局（`resolveLayoutMode`）**：
+   - `>= 600px`（`.is-wide`）：隐藏单栏顶行导航，展开 `.t3c-resizer`（支持指针拖拽与 `ArrowLeft`/`ArrowRight` 键盘调节，夹紧 `[180px, total - 325px]`）与持久右侧 `.t3c-wide-sidebar`（快捷动作、`项目` 目录名、可搜索的 `SESSIONS` 列表并支持 `时间` / `Inbox` 分组切换，剔除 `archived` 会话）。切换至宽栏时自动收起单栏 `historyPopover`。
+   - `300px–599px`（单栏默认）与 `< 300px`（`.is-narrow`）：输入盒上方展示多标签独立兄弟按钮徽标（`.t3c-tab-badge` 内含选择按钮与仅活动多标签可见的关闭按钮，无嵌套交互元素）及 `[+][✎][🕒]` 动作组；`< 300px` 下收敛底栏辅助文案与模型弹层列宽。
+3. **底部工具栏与锚定弹层（`.t3c-composer-dock`）**：
+   - 左侧 `Agent · 模型 · 思考度` 胶囊按钮打开固定 `236px` 高三列弹层（Agent 图标栏 / 带过滤的模型两行列表 / 1–4 格信号条思考强度）；浏览其他 Agent 但未切模型时，思考列置 `is-inert` 且选项按钮 `disabled`；已在 CLI 创建的会话锁定变更并提供「带着草稿新开会话」。
+   - 中间 240° SVG 圆弧用量仪表如实展示 `—` 与「CLI 暂未提供数据」说明。
+   - 右侧权限胶囊只读展示当前 `runtimeMode`（并附安全的 T3 Code 外链）；Vault 目录重叠检查同时结合 `realpath` 缓存与标准化 `workspacesOverlap`。
+   - 框外最底行 `.t3c-note-footer` 独立切换 `includeNote`，并将输入/选区变化更新局部化到发送按钮与注脚，避免频繁重建徽标与会话列表 DOM。
+   - 所有弹层相对 `.t3c-composer-dock` 向上浮动（`bottom: calc(100% + 6px)`），维护 `aria-expanded`，并在文档级监听 `Escape` 关闭与焦点恢复。

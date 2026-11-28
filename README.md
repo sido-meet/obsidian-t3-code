@@ -1,11 +1,11 @@
-# Obsidian T3 Code
+# T3-Codian
 
 在 Obsidian 原生右侧栏中使用本机 T3 Code，发送消息时可以带上当前笔记或选区。
 
 ## 安装与使用
 
 1. 使用 Node.js 22 运行 `npm ci` 和 `npm run build`。
-2. 在专用 Obsidian 测试库的 `.obsidian/plugins/obsidian-t3-code/` 中放入 `main.js`、`manifest.json` 和 `styles.css`，然后启用 **Obsidian T3 Code**。
+2. 在专用 Obsidian 测试库的 `.obsidian/plugins/t3-codian/` 中放入 `main.js`、`manifest.json` 和 `styles.css`，然后启用 **T3-Codian**。
 3. 启动本机 T3 Code。在 T3 Code 中将当前知识库目录注册为项目，将项目默认运行权限设为「需要审批」。
 4. 「T3 项目目录」留空时使用当前知识库。在「T3 项目 ID」填写该目录在 T3 Code 中登记的 ID，避免 CLI 将未登记的目录解析到上层项目。若要改用其他已注册项目，可填写其根目录及 ID。确认本机 CLI 路径、Provider 实例 ID 和模型。Windows 默认寻找 T3 Code 生成的 `%USERPROFILE%\.t3\bin\t3.cmd`，其他桌面平台使用 PATH 中的 `t3`。
 5. 如需更多可选模型，在插件设置中的「侧栏模型预设」每行填入一组 Provider 实例、模型和可选推理参数。

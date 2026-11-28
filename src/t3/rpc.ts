@@ -5,6 +5,29 @@ export function record(value: unknown): WireObject {
     ? value as WireObject : {};
 }
 
+/** Redacts bearer tokens, DPoP tokens, WS tickets, and auth URL/JSON parameters from errors and diagnostics. */
+export function redactSensitiveText(text: string): string {
+  return text
+    .replace(/\b(Bearer|DPoP)\s+[^\s"'`<>?&]+/gi, '$1 [REDACTED]')
+    .replace(/([?&]|\b)((?:wsTicket|ticket|token|access_token|subject_token|refresh_token|pairingCode|code|secret)=)[^&\s#"']+/gi, '$1$2[REDACTED]')
+    .replace(/("(?:token|access_token|subject_token|wsTicket|ticket|secret|pairingCode|refresh_token)"\s*:\s*")[^"]+(")/gi, '$1[REDACTED]$2')
+    .replace(/(\\"(?:token|access_token|subject_token|wsTicket|ticket|secret|pairingCode|refresh_token)\\"\s*:\s*\\")[^"\\]+(\\")/gi, '$1[REDACTED]$2');
+}
+
+function extractFailureMessage(exit: WireObject): string {
+  const causeObj = record(exit.cause);
+  const nodes = Array.isArray(exit.cause)
+    ? exit.cause
+    : Array.isArray(causeObj.reasons) ? causeObj.reasons : [exit.cause];
+  for (const item of nodes) {
+    const node = record(item);
+    const err = record(node.error);
+    const raw = node._tag === 'Fail' ? (err.detail ?? err.message) : undefined;
+    if (typeof raw === 'string' && raw) return redactSensitiveText(raw);
+  }
+  return 'T3 拒绝了请求。请检查项目、Codex 配置和配对权限。';
+}
+
 interface RpcSocket extends EventTarget {
   send(data: string): void;
   close(): void;
@@ -76,7 +99,7 @@ export class T3Rpc {
       this.pending.delete(requestId);
       const exit = record(frame.exit);
       if (exit._tag === 'Success') call.resolve(exit.value);
-      else call.reject(new Error('T3 拒绝了请求。请检查项目、Codex 配置和配对权限。'));
+      else call.reject(new Error(extractFailureMessage(exit)));
     }
   }
 
@@ -108,6 +131,13 @@ export class T3Rpc {
       if (!chunk) timer = setTimeout(cancel, 15000);
     }).finally(() => clearTimeout(timer));
     return { result, cancel };
+  }
+
+  subscribe(tag: string, payload: unknown, onChunk: (value: unknown) => void): {
+    result: Promise<unknown>; unsubscribe: () => void;
+  } {
+    const { result, cancel } = this.request(tag, payload, onChunk);
+    return { result, unsubscribe: cancel };
   }
 
   close(): void {

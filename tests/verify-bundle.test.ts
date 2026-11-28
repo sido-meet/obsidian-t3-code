@@ -35,6 +35,19 @@ describe('bundle compliance policy', () => {
     );
   });
 
+  it('accepts the exact manifest version as a release tag', () => {
+    expect(check({ releaseTag: '0.1.0' })).toEqual([]);
+  });
+
+  it.each(['v0.1.0', '0.2.0', '0.1.0-beta.1'])('rejects release tag %s', releaseTag => {
+    expect(check({ releaseTag })).toContainEqual(expect.stringContaining('release tag'));
+  });
+
+  it('rejects a matching release tag when the version is not x.y.z', () => {
+    expect(check({ manifestVersion: '0.1.0-beta.1', packageVersion: '0.1.0-beta.1', releaseTag: '0.1.0-beta.1' }))
+      .toContainEqual(expect.stringContaining('release tag'));
+  });
+
   it('reports every violation at once', () => {
     expect(
       check({

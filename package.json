@@ -1,7 +1,7 @@
 {
-  "name": "obsidian-t3-code",
+  "name": "t3-codian",
   "version": "0.1.0",
-  "description": "T3 Code Agent integration for Obsidian",
+  "description": "Chat with local T3 Code agents and reference your notes.",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -15,7 +15,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/markdown-it": "^14.2.0",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^3.2.7",
     "esbuild": "^0.28.2",
@@ -25,9 +24,5 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.73.0",
     "vitest": "^3.2.7"
-  },
-  "dependencies": {
-    "highlight.js": "^11.12.0",
-    "markdown-it": "^15.0.3"
   }
 }

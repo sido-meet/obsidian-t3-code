@@ -25,6 +25,7 @@ const violations = collectBundleViolations({
   sizeBytes,
   manifestVersion: manifest.version,
   packageVersion: packageJson.version,
+  releaseTag: process.argv[2],
 });
 
 if (violations.length > 0) {

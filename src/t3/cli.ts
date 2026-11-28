@@ -91,16 +91,42 @@ export interface CliThread {
   runtimeMode?: string;
   interactionMode?: string;
   link?: string;
+  settled?: boolean;
+  pinned?: boolean;
+  snoozed?: boolean;
+  archived?: boolean;
+  parentThreadId?: string;
+  relationshipToParent?: string;
+  pendingRequestCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 function optionalText(value: unknown): string | undefined {
   return typeof value === 'string' && value ? value : undefined;
 }
 
+function optionalBool(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function optionalCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function readThread(value: unknown, fallbackId?: string): CliThread | undefined {
   const thread = record(value);
   const threadId = optionalText(thread.threadId) ?? fallbackId;
   if (!threadId || typeof thread.status !== 'string') return;
+  const settled = optionalBool(thread.settled);
+  const pinned = optionalBool(thread.pinned);
+  const snoozed = optionalBool(thread.snoozed);
+  const archived = optionalBool(thread.archived);
+  const parentThreadId = optionalText(thread.parentThreadId);
+  const relationshipToParent = optionalText(thread.relationshipToParent);
+  const pendingRequestCount = optionalCount(thread.pendingRequestCount);
+  const createdAt = optionalText(thread.createdAt);
+  const updatedAt = optionalText(thread.updatedAt);
   return {
     threadId,
     title: optionalText(thread.title) ?? '未命名会话',
@@ -111,6 +137,15 @@ function readThread(value: unknown, fallbackId?: string): CliThread | undefined 
     runtimeMode: optionalText(thread.runtimeMode),
     interactionMode: optionalText(thread.interactionMode),
     link: optionalText(thread.link),
+    ...(settled !== undefined ? { settled } : {}),
+    ...(pinned !== undefined ? { pinned } : {}),
+    ...(snoozed !== undefined ? { snoozed } : {}),
+    ...(archived !== undefined ? { archived } : {}),
+    ...(parentThreadId !== undefined ? { parentThreadId } : {}),
+    ...(relationshipToParent !== undefined ? { relationshipToParent } : {}),
+    ...(pendingRequestCount !== undefined ? { pendingRequestCount } : {}),
+    ...(createdAt !== undefined ? { createdAt } : {}),
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
   };
 }
 

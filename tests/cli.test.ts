@@ -65,3 +65,39 @@ it('does not launch a CLI command after the view has already closed', async () =
   const run = cliRunner('missing-executable', controller.signal);
   await expect(run(['thread', 'list'])).rejects.toThrow('请求已取消');
 });
+
+it('parses extended T3 CLI thread metadata while keeping missing fields omitted', async () => {
+  const full = {
+    threadId: 'thread-rich',
+    title: 'Inbox Thread',
+    status: 'waiting',
+    projectId: 'proj-1',
+    providerInstanceId: 'codex-personal',
+    model: 'gpt-5.4',
+    runtimeMode: 'approval-required',
+    interactionMode: 'plan',
+    link: 'https://app.t3.codes/threads/local/thread-rich',
+    settled: false,
+    pinned: true,
+    snoozed: false,
+    archived: false,
+    parentThreadId: 'parent-1',
+    relationshipToParent: 'subagent',
+    pendingRequestCount: 2,
+    createdAt: '2026-11-26T00:00:00.000Z',
+    updatedAt: '2026-11-27T10:00:00.000Z',
+  };
+  const minimal = {
+    threadId: 'thread-min',
+    title: 'Minimal',
+    status: 'idle',
+    settled: 'invalid',
+    pendingRequestCount: -1,
+  };
+  const chat = new CliChat(async args => (args[1] === 'list' ? [full, minimal] : { thread: full, messages: [] }));
+  const listed = await chat.list('/vault');
+  expect(listed[0]).toEqual(full);
+  expect(listed[1]).toEqual({ threadId: 'thread-min', title: 'Minimal', status: 'idle' });
+  expect('settled' in listed[1]).toBe(false);
+  expect('pendingRequestCount' in listed[1]).toBe(false);
+});

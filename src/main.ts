@@ -15,7 +15,11 @@ export default class ObsidianT3CodePlugin extends Plugin {
     const write = this.saving.then(async () => {
       const settings = normalizeSettings({ ...this.settings, ...patch });
       await this.saveData(settings);
-      const changedBackend = settings.cliPath !== this.settings.cliPath || settings.projectPath !== this.settings.projectPath || settings.projectId !== this.settings.projectId;
+      const changedBackend = settings.cliPath !== this.settings.cliPath
+        || settings.projectPath !== this.settings.projectPath
+        || settings.projectId !== this.settings.projectId
+        || settings.serverUrl !== this.settings.serverUrl
+        || settings.backendPreference !== this.settings.backendPreference;
       const changedModels = settings.provider !== this.settings.provider || settings.model !== this.settings.model ||
         settings.modelPresets !== this.settings.modelPresets;
       this.settings = settings;
@@ -37,10 +41,10 @@ export default class ObsidianT3CodePlugin extends Plugin {
     this.settings = normalizeSettings(await this.loadData());
     this.addSettingTab(new SettingsTab(this.app, this));
     this.registerView(VIEW_TYPE_OBSIDIAN_T3_CODE, leaf => new ObsidianT3CodeView(leaf, this));
-    this.addRibbonIcon('message-square', 'Obsidian T3 Code', () => this.openChatView());
+    this.addRibbonIcon('message-square', 'T3-Codian', () => this.openChatView());
     this.addCommand({
-      id: 'obsidian-t3-code-open-chat',
-      name: '打开 Obsidian T3 Code 聊天面板',
+      id: 'open-chat',
+      name: '打开 T3-Codian 聊天面板',
       callback: () => this.openChatView(),
     });
   }
@@ -51,12 +55,23 @@ export default class ObsidianT3CodePlugin extends Plugin {
     super.onunload();
   }
 
+  async pairWithCode(code: string): Promise<void> {
+    const view = this.app.workspace.getLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE)
+      .map(leaf => (leaf as WorkspaceLeaf & { view?: unknown }).view)
+      .find((candidate): candidate is ObsidianT3CodeView => candidate instanceof ObsidianT3CodeView);
+    if (!view) {
+      throw new Error('请先在右侧栏打开 T3-Codian 面板后再执行配对连接。');
+    }
+    await view.pairWithCode(code);
+  }
+
   private openChatView(): void {
     const workspace = this.app.workspace;
     if (!this.opening) {
       const existing = workspace.getLeavesOfType(VIEW_TYPE_OBSIDIAN_T3_CODE)[0];
       if (existing) {
-        void workspace.revealLeaf(existing).catch(() => new Notice('无法显示 Obsidian T3 Code 侧栏。'));
+        void Promise.resolve(workspace.revealLeaf(existing))
+          .catch(() => new Notice('无法显示 T3-Codian 侧栏。'));
         return;
       }
       const leaf = workspace.getRightLeaf(false);
@@ -66,6 +81,6 @@ export default class ObsidianT3CodePlugin extends Plugin {
     }
     void this.opening.then(leaf => {
       if (!this.unloaded) return workspace.revealLeaf(leaf);
-    }).catch(() => new Notice('无法显示 Obsidian T3 Code 侧栏。'));
+    }).catch(() => new Notice('无法显示 T3-Codian 侧栏。'));
   }
 }

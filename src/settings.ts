@@ -2,6 +2,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ModelSelection } from './t3/cli';
 
+export type BackendPreference = 'auto' | 'cli';
+
 export interface Settings {
   cliPath: string;
   projectPath: string;
@@ -10,6 +12,8 @@ export interface Settings {
   model: string;
   modelPresets: string;
   includeNote: boolean;
+  serverUrl: string;
+  backendPreference: BackendPreference;
 }
 
 const defaultCliPath = process.platform === 'win32' ? join(homedir(), '.t3', 'bin', 't3.cmd') : 't3';
@@ -24,6 +28,8 @@ export function normalizeSettings(value: unknown): Settings {
     model: (typeof saved?.model === 'string' && saved.model.trim()) || 'gpt-6-astra',
     modelPresets: typeof saved?.modelPresets === 'string' ? saved.modelPresets : '',
     includeNote: saved?.includeNote === true,
+    serverUrl: typeof saved?.serverUrl === 'string' ? saved.serverUrl.trim() : '',
+    backendPreference: saved?.backendPreference === 'cli' ? 'cli' : 'auto',
   };
 }
 
