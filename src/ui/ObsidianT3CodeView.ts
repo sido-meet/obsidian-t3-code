@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { basename, isAbsolute } from 'node:path';
-import { FileSystemAdapter, FuzzySuggestModal, ItemView, MarkdownView, Notice, setIcon } from 'obsidian';
+import { Component, FileSystemAdapter, FuzzySuggestModal, ItemView, MarkdownView, Notice, setIcon } from 'obsidian';
 import type { TFile, WorkspaceLeaf } from 'obsidian';
 import type ObsidianT3CodePlugin from '../main';
 import { composePrompt } from '../context';
@@ -8,7 +8,7 @@ import { CliChat, cliRunner } from '../t3/cli';
 import type { CliThread, ModelSelection } from '../t3/cli';
 import { configuredModels } from '../settings';
 import { resolveWorkspacePath, workspacesOverlap } from '../t3/workspace';
-import { renderMarkdown } from './markdown';
+import { renderSafeMarkdown } from './markdown';
 import { composeAttachments } from './note-attachments';
 import type { Message } from '../t3/transcript';
 import {
@@ -68,8 +68,19 @@ interface SidebarTab {
   selectionRevision: number;
 }
 
+interface RowEntry {
+  message: Message;
+  element: HTMLElement;
+  bodyEl?: HTMLElement;
+  renderComponent?: Component;
+  renderSeq: number;
+  throttleTimer?: ReturnType<typeof setTimeout>;
+  lastRenderAt: number;
+  lastRenderedText?: string;
+}
+
 export default class ObsidianT3CodeView extends ItemView {
-  private readonly rows = new Map<string, { message: Message; element: HTMLElement }>();
+  private readonly rows = new Map<string, RowEntry>();
   private tabs: SidebarTab[] = [];
   private activeTabId = '';
   private nextTabNumber = 1;
@@ -225,7 +236,19 @@ export default class ObsidianT3CodeView extends ItemView {
     clearInterval(this.elapsedTimer);
     this.elapsedTimer = undefined;
     for (const tab of this.tabs) this.abortTab(tab);
+    for (const entry of this.rows.values()) this.disposeRow(entry);
     this.rows.clear();
+  }
+
+  private disposeRow(entry: RowEntry): void {
+    clearTimeout(entry.throttleTimer);
+    entry.throttleTimer = undefined;
+    entry.renderSeq++;
+    if (entry.renderComponent) {
+      this.removeChild(entry.renderComponent);
+      entry.renderComponent.unload();
+      entry.renderComponent = undefined;
+    }
   }
 
   private buildMessageArea(parent: HTMLElement): void {
@@ -1306,53 +1329,122 @@ export default class ObsidianT3CodeView extends ItemView {
     for (const message of messages) {
       remaining.delete(message.id);
       const previous = this.rows.get(message.id);
-      const entry = previous?.message.text === message.text && previous.message.role === message.role && previous.message.streaming === message.streaming
-        ? previous : this.createRow(message, previous?.element);
+      const entry = previous && previous.message.role === message.role
+        ? this.updateExistingRow(previous, message)
+        : this.createRow(message, previous);
       if (entry.element !== cursor) this.messagesEl.insertBefore(entry.element, cursor);
       cursor = entry.element.nextElementSibling;
       this.rows.set(message.id, entry);
     }
     for (const id of remaining) {
-      this.rows.get(id)?.element.remove();
+      const stale = this.rows.get(id);
+      if (stale) {
+        this.disposeRow(stale);
+        stale.element.remove();
+      }
       this.rows.delete(id);
     }
     if (nearBottom) this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
   }
 
-  private createRow(message: Message, element?: HTMLElement) {
-    const row = element ?? this.messagesEl.createDiv({ cls: 't3c-msg' });
+  private updateExistingRow(entry: RowEntry, message: Message): RowEntry {
+    if (entry.message.text === message.text && entry.message.streaming === message.streaming) {
+      return entry;
+    }
+    if (message.role === 'user') {
+      entry.message = message;
+      entry.bodyEl?.setText(message.text);
+      return entry;
+    }
+    // Assistant row: if transitioning between streaming and finalized, rebuild actions once;
+    // during active streaming chunks keep DOM & action buttons stable and throttle Markdown rendering.
+    if (!entry.bodyEl || entry.message.streaming !== message.streaming) {
+      return this.createRow(message, entry);
+    }
+    entry.message = message;
+    this.scheduleAssistantRender(entry, message.text, !message.streaming);
+    return entry;
+  }
+
+  private createRow(message: Message, previous?: RowEntry): RowEntry {
+    if (previous) this.disposeRow(previous);
+    const row = previous?.element ?? this.messagesEl.createDiv({ cls: 't3c-msg' });
     row.empty();
     row.toggleClass('is-user', message.role === 'user');
     row.toggleClass('is-assistant', message.role === 'assistant');
     if (message.role === 'user') {
       row.setAttribute('aria-label', '你的消息');
-      row.createDiv({ cls: 't3c-msg-user-body', text: message.text });
-      return { message, element: row };
+      const bodyEl = row.createDiv({ cls: 't3c-msg-user-body', text: message.text });
+      return { message, element: row, bodyEl, renderSeq: (previous?.renderSeq ?? 0) + 1, lastRenderAt: 0 };
     }
     row.removeAttribute('aria-label');
+    const bodyEl = row.createDiv({ cls: 't3c-markdown' });
+    const entry: RowEntry = {
+      message,
+      element: row,
+      bodyEl,
+      renderSeq: (previous?.renderSeq ?? 0) + 1,
+      lastRenderAt: 0,
+    };
     if (!message.streaming) {
-      const rendered = row.createDiv({ cls: 't3c-markdown' });
-      try {
-        rendered.innerHTML = renderMarkdown(message.text);
-      } catch {
-        rendered.addClass('t3c-msg-plain');
-        rendered.setText(message.text);
-      }
       const actions = row.createDiv({ cls: 't3c-msg-actions' });
       this.iconButton(actions, 'copy', '复制 Markdown', async () => {
-        await navigator.clipboard.writeText(message.text);
+        await navigator.clipboard.writeText(entry.message.text);
         if (this.ready && this.connectionError) this.setConnectionError(undefined);
         new Notice('已复制 Markdown。');
       });
       this.iconButton(actions, 'corner-down-left', '插入当前光标处', () => {
         const editor = this.note()?.editor;
         if (!editor) throw new Error('请先打开要插入内容的 Markdown 笔记。');
-        editor.replaceRange(message.text, editor.getCursor());
+        editor.replaceRange(entry.message.text, editor.getCursor());
         if (this.ready && this.connectionError) this.setConnectionError(undefined);
       });
-    } else {
-      row.createDiv({ cls: 't3c-msg-plain', text: message.text });
     }
-    return { message, element: row };
+    this.scheduleAssistantRender(entry, message.text, !message.streaming);
+    return entry;
+  }
+
+  private scheduleAssistantRender(entry: RowEntry, text: string, immediate: boolean): void {
+    if (entry.lastRenderedText === text) return;
+    if (immediate) {
+      clearTimeout(entry.throttleTimer);
+      entry.throttleTimer = undefined;
+      void this.flushAssistantRender(entry, text);
+      return;
+    }
+    const elapsed = Date.now() - entry.lastRenderAt;
+    if (elapsed >= 120) {
+      clearTimeout(entry.throttleTimer);
+      entry.throttleTimer = undefined;
+      void this.flushAssistantRender(entry, text);
+      return;
+    }
+    if (entry.throttleTimer !== undefined) return;
+    entry.throttleTimer = setTimeout(() => {
+      entry.throttleTimer = undefined;
+      void this.flushAssistantRender(entry, entry.message.text);
+    }, Math.max(16, 120 - elapsed));
+  }
+
+  private async flushAssistantRender(entry: RowEntry, text: string): Promise<void> {
+    if (!this.visible || !entry.bodyEl) return;
+    const seq = ++entry.renderSeq;
+    entry.lastRenderAt = Date.now();
+    entry.lastRenderedText = text;
+    const comp = new Component();
+    comp.load();
+    await renderSafeMarkdown(this.app, text, entry.bodyEl, comp);
+    if (!this.visible || !entry.element.parentElement || entry.renderSeq !== seq) {
+      comp.unload();
+      return;
+    }
+    const nearBottom = this.messagesEl.scrollHeight - this.messagesEl.scrollTop - this.messagesEl.clientHeight < 60;
+    const prev = entry.renderComponent;
+    entry.renderComponent = this.addChild(comp);
+    if (prev && prev !== comp) {
+      this.removeChild(prev);
+      prev.unload();
+    }
+    if (nearBottom) this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
   }
 }

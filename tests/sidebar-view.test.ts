@@ -80,7 +80,7 @@ class FakeElement {
   children: FakeElement[] = [];
   parentElement: FakeElement | null = null;
   readonly classes = new Set<string>();
-  readonly attributes = new Map<string, string>();
+  private readonly attrMap = new Map<string, string>();
   readonly style: Record<string, unknown> & { setProperty(k: string, v: string): void };
   readonly listeners = new Map<string, Set<Listener>>();
   hidden = false;
@@ -156,6 +156,31 @@ class FakeElement {
     this._html = val ?? '';
   }
 
+  get attributes() {
+    return [...this.attrMap.entries()].map(([name, value]) => ({ name, value }));
+  }
+
+  get classList() {
+    return {
+      contains: (c: string) => this.classes.has(c),
+      add: (c: string) => { this.addClass(c); },
+      remove: (c: string) => { this.removeClass(c); },
+    };
+  }
+
+  get className(): string {
+    return [...this.classes].join(' ');
+  }
+
+  set className(val: string) {
+    this.classes.clear();
+    if (val) this.addClass(val);
+  }
+
+  get firstChild(): FakeElement | null {
+    return this.children[0] ?? null;
+  }
+
   get firstElementChild(): FakeElement | null {
     return this.children[0] ?? null;
   }
@@ -212,18 +237,18 @@ class FakeElement {
   }
 
   setAttribute(key: string, val: string): void {
-    this.attributes.set(key, String(val));
+    this.attrMap.set(key, String(val));
     if (key === 'href') this.href = String(val);
     if (key === 'title') this.title = String(val);
   }
 
   getAttribute(key: string): string | null {
     if (key === 'href' && this.href) return this.href;
-    return this.attributes.get(key) ?? null;
+    return this.attrMap.get(key) ?? null;
   }
 
   removeAttribute(key: string): void {
-    this.attributes.delete(key);
+    this.attrMap.delete(key);
     if (key === 'href') this.href = '';
   }
 
@@ -830,6 +855,8 @@ describe('ObsidianT3CodeView V2 UI', () => {
     // Open existing CLI thread -> permissions popover shows T3 Code link, connected action error surfaces on missing note
     await (view as unknown as { switchThread: (thread?: CliThread) => Promise<void> }).switchThread(activeThread);
     await flush();
+    const mountedChildren = [...((view as unknown as { children: Array<{ unloaded: boolean }> }).children ?? [])];
+    expect(mountedChildren.length).toBeGreaterThan(0);
     const msgRows = root.querySelectorAll('.t3c-msg');
     expect(msgRows[0]!.getAttribute('aria-label')).toBe('你的消息');
     expect(msgRows[1]!.getAttribute('aria-label')).toBeNull();
@@ -855,11 +882,18 @@ describe('ObsidianT3CodeView V2 UI', () => {
     root.querySelector('.t3c-solid-btn')!.click();
     await flush();
 
-    // Clones draft in same tab, clearing threadId and opening the 3-column selector
+    // Clones draft in same tab, clearing threadId and opening the 3-column selector (and disposing old row Component)
     expect(root.querySelectorAll('.t3c-tab-badge')).toHaveLength(1);
     expect(draft.value).toBe('Carry this draft over');
     expect(root.querySelector('.t3c-mp-agents')).not.toBeNull();
+    expect(mountedChildren.every(c => c.unloaded)).toBe(true);
 
+    // Switch back to thread then close view -> verifies onClose unloads active row Component too
+    await (view as unknown as { switchThread: (thread?: CliThread) => Promise<void> }).switchThread(activeThread);
+    await flush();
+    const activeChildren = [...((view as unknown as { children: Array<{ unloaded: boolean }> }).children ?? [])];
+    expect(activeChildren.length).toBeGreaterThan(0);
     await view.onClose();
+    expect(activeChildren.every(c => c.unloaded)).toBe(true);
   });
 });

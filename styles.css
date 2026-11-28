@@ -94,10 +94,11 @@
   border-radius: 7px;
   background: var(--background-secondary);
 }
-.t3c-markdown .hljs-keyword { color: var(--code-keyword); }
-.t3c-markdown .hljs-string { color: var(--code-string); }
-.t3c-markdown .hljs-number { color: var(--code-value); }
-.t3c-markdown .hljs-comment { color: var(--code-comment); }
+.t3c-markdown a.is-blocked-link {
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: default;
+}
 .t3c-markdown table {
   display: block;
   max-width: 100%;

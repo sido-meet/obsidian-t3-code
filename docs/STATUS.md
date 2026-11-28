@@ -71,3 +71,16 @@ Windows 隔离联调验证：真实 t3.cmd 新建线程、轮询读取回复、�
   - 更新索引：[docs/adr/README.md](adr/README.md)
   - 新增分阶段实施计划：[docs/superpowers/plans/2026-11-28-rpc-first-cli-fallback-plan.md](superpowers/plans/2026-11-28-rpc-first-cli-fallback-plan.md)
 - **待用户确认**：M0 两项前置决策（`main.js` 体积余量方案 & 默认鉴权接入优先级）及各阶段改造范围确认后进入实施。
+
+
+---
+
+## 2026-11-28 — M0 完成：采纳 ADR-0003 并迁移原生 `MarkdownRenderer.render()`
+
+- **状态**：已完成 M0（ADR-0003 正式转为 **Accepted**，移除内置 `markdown-it` 与 `highlight.js`，迁移至 Obsidian 原生 `MarkdownRenderer.render()`）。
+- **核心改动**：
+  - [package.json](../package.json) / [package-lock.json](../package-lock.json)：卸载 `markdown-it`、`highlight.js`、`@types/markdown-it`（移除 11 个包）。
+  - [src/ui/markdown.ts](../src/ui/markdown.ts)：实现非可信 AI 输出前置清洗（拦截第三方可执行代码块 `dataviewjs`/`templater` 等重写为 `text`、阻断 `![[...]]` 嵌入与远程图片、过滤 `<script>` 等原始 HTML 与非 `http(s):`/`mailto:` 链接、超过 40,000 字符降级惰性纯文本）及离屏渲染后 DOM 二次加固（移除 `on*` 事件属性与高危元素）。
+  - [src/ui/ObsidianT3CodeView.ts](../src/ui/ObsidianT3CodeView.ts)：引入行级 `Component` 生命周期绑定、异步 `renderSeq` 竞态丢弃保护、`120ms` 流式节流与不破坏阅读回溯的底部滚动锁定。
+  - [styles.css](../styles.css)、[tests/__mocks__/obsidian.ts](../tests/__mocks__/obsidian.ts)、[tests/markdown.test.ts](../tests/markdown.test.ts)、[tests/sidebar-view.test.ts](../tests/sidebar-view.test.ts)。
+- **验证结果**：`typecheck` 0 错误、`lint` (`--max-warnings=0`) 0 警告、`test:coverage` 15 个测试文件 / 75 条测试全过（总覆盖率 `86.46%` Stmts / `82.63%` Branch / `89.65%` Funcs，`markdown.ts` 100% Stmts & Funcs），`main.js` 体积由 **`192,306` 字节降至 `60,192` 字节**（释放 `132,114` 字节，`144,608` 字节余量低于 `204,800` 上限）。

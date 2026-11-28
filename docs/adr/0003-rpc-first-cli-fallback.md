@@ -1,7 +1,7 @@
 # ADR-0003: RPC First + CLI Fallback 混合后端架构与统一状态层设计
 
 ## 状态 (Status)
-**Proposed**（等待用户审阅并确认方案与打包预算决策后实施；当前状态保留 ADR-0002 的纯 CLI 实现作为兼容基线，尚未改动生产代码）
+**Accepted**（用户已确认采用 ADR-0003 架构：M0 迁移至原生 `MarkdownRenderer.render()` 保留 200 KiB 打包约束；默认桌面端通过自动发现 T3 CLI 签发受限短期 Session，保留手动配对备选；按 M0 → M6 计划推进实施）
 
 ## 日期
 2026-11-28

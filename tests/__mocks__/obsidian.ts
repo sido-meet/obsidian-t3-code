@@ -40,11 +40,62 @@ export class App {
   workspace = new Workspace();
 }
 
-export class ItemView {
+export class Component {
+  readonly children: Component[] = [];
+  unloaded = false;
+
+  load(): void {
+    this.unloaded = false;
+  }
+
+  unload(): void {
+    this.unloaded = true;
+    for (const child of [...this.children]) child.unload();
+    this.children.length = 0;
+  }
+
+  addChild<T extends Component>(child: T): T {
+    if (!this.children.includes(child)) this.children.push(child);
+    return child;
+  }
+
+  removeChild<T extends Component>(child: T): T {
+    const idx = this.children.indexOf(child);
+    if (idx >= 0) this.children.splice(idx, 1);
+    return child;
+  }
+}
+
+export class ItemView extends Component {
   readonly titleEl = { setText(): void {} };
 
-  constructor(public leaf: WorkspaceLeaf) {}
+  constructor(public leaf: WorkspaceLeaf) {
+    super();
+  }
 }
+
+export const MarkdownRenderer = {
+  async render(_app: App, markdown: string, el: HTMLElement, _sourcePath: string, _component: Component): Promise<void> {
+    const doc = el.ownerDocument;
+    if (!doc) return;
+    const pre = doc.createElement('div');
+    pre.className = 't3c-mock-rendered';
+    // Lightweight mock reflecting lines, headings, links, and raw HTML for security unit tests.
+    for (const line of markdown.split(/\r?\n/)) {
+      const heading = line.match(/^(#{1,3})\s+(.+)$/);
+      if (heading) {
+        const h = doc.createElement(`h${heading[1].length}`);
+        h.textContent = heading[2];
+        pre.appendChild(h);
+        continue;
+      }
+      const p = doc.createElement('p');
+      p.textContent = line;
+      pre.appendChild(p);
+    }
+    el.appendChild(pre);
+  },
+};
 
 export class Plugin {
   readonly registeredViews: { type: string; factory: unknown }[] = [];
